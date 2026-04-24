@@ -35,3 +35,10 @@ checkpointer.db
 # Logs
 *.log
 nohup.out
+
+# AIES
+.aies/.developer
+.aies/scripts/**/__pycache__/
+# workspace/ 和 tasks/ 本身要提交（团队共享记忆），但若开发者个人不想共享可解注释：
+# .aies/workspace/
+# .aies/tasks/

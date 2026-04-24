@@ -1,0 +1,51 @@
+---
+description: AIES (AI Engineering Scaffold) — 项目级 AI 行为规范
+alwaysApply: true
+enabled: true
+---
+
+# {{PROJECT_NAME}} — Cursor AI 规范
+
+## 必读文件（每次对话开始）
+
+1. `.aies/workflow.md` — 工作流
+2. `.aies/spec/index.md` — 规范导航
+3. `.ai/index.md` — 项目地图
+4. `.ai/review-checklist.md` — 审查清单
+
+## 强制协议
+
+### Phase 1：任务启动清单（写代码前必须输出）
+
+```
+📋 任务启动清单
+━━━━━━━━━━━━━━
+• 任务类型：[新增 / 修改 / 修复 / 重构 / 其他]
+• 需读取的参考文件：[按 .ai/context-guide.md 列出]
+• 涉及的规范要点：[从 .aies/spec/ 列出]
+• 预计变更文件：[列出]
+• 索引需更新：[是 / 否]
+```
+
+### Phase 3：任务完成清单（写完代码后必须输出）
+
+```
+✅ 任务完成清单
+━━━━━━━━━━━━━━
+1. 质量自检（参照 .ai/review-checklist.md）
+2. 索引更新：[已更新 .ai/index.md / 无需]
+3. 建议 commit message：`type(scope): 描述 [ai-assisted]`
+4. 会话日志命令：python3 .aies/scripts/session.py add --title "..." --summary "..."
+5. Spec 缺口：[有/无]
+```
+
+## 场景化上下文
+
+收到任务时，按 `.ai/context-guide.md` **主动读取**对应文件，不要等 @ 引入。
+
+## 禁止事项
+
+- ❌ 跳过 Phase 1 清单
+- ❌ 编造项目中不存在的函数/类型
+- ❌ 大段重写用户未要求的代码
+- ❌ `git commit/push` 未经用户确认
