@@ -20,7 +20,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from pipeline import get_app, print_graph, print_state, list_threads, _save_review
+from main_graph import get_app, print_graph, print_state, list_threads, _save_review
 
 
 def main():
@@ -174,7 +174,7 @@ def main():
     print(f"   模式: {'--urls 注入' if initial_videos else 'LLM 推荐 + 人工审核'}")
     print()
 
-    from pipeline import PipelineState
+    from main_graph import PipelineState
     initial: PipelineState = {
         "topic":            topic,
         "research_results":  None,
@@ -198,7 +198,7 @@ def main():
 
 
 def _get_review_data(thread_id):
-    from pipeline import _get_review
+    from main_graph import _get_review
     return _get_review(thread_id)
 
 
