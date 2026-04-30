@@ -373,7 +373,18 @@ def node_dispatcher(state: PipelineState) -> Dict[str, Any]:
 
 
 def route_dispatcher(state: PipelineState):
-    """List[Send] 只能从 conditional edge 返回。"""
+    """List[Send] 只能从 conditional edge 返回。
+
+    并发控制：每批最多 TRANSCRIBE_CONCURRENCY 个，保守取 cpu_count // 2。
+    transcribe_single 完成后回到 dispatcher，dispatcher 再发下一批，
+    避免全量并发抢 CPU 导致 Whisper 超时。
+    """
+    import os
+    # 保守并发数：cpu_count // 2，最少 1，最多 4
+    # 8 核机器 → 4；4 核 → 2；留一半给系统和下载
+    cpu = os.cpu_count() or 4
+    batch_size = max(1, min(cpu // 2, 4))
+
     dispatched = set(state.get("_dispatched", []))
     pending = [v for v in state.get("pending_videos", []) if v not in dispatched]
 
@@ -381,7 +392,12 @@ def route_dispatcher(state: PipelineState):
         print("[main:route] 无待处理视频，进入 write_book")
         return "write_book_node"
 
-    print(f"[main:route] 分发 {len(pending)} 个 Send 到 transcribe_single")
+    # 本批只取 batch_size 条
+    batch = pending[:batch_size]
+    remaining = len(pending) - len(batch)
+    print(f"[main:route] 本批分发 {len(batch)} 个（剩余 {remaining} 个待下批），"
+          f"并发数={batch_size}（{cpu} 核 // 2）")
+
     return [
         Send(
             "transcribe_single",
@@ -392,7 +408,7 @@ def route_dispatcher(state: PipelineState):
                 "_trace_span": state.get("_trace_span"),
             },
         )
-        for i, video in enumerate(pending)
+        for i, video in enumerate(batch)   # 只发本批，不是全量 pending
     ]
 
 
