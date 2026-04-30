@@ -26,7 +26,7 @@ docker compose up -d
 
 ### 3. 初始化
 
-浏览器访问 `http://localhost:3000`，按提示注册管理员账号。
+浏览器访问 `http://localhost:3001`，按提示注册管理员账号。
 
 ### 4. 创建项目并获取 Keys
 
@@ -42,8 +42,10 @@ docker compose up -d
 ```bash
 LANGFUSE_PUBLIC_KEY=pk-lf-xxxxxxxx
 LANGFUSE_SECRET_KEY=sk-lf-xxxxxxxx
-LANGFUSE_HOST=http://localhost:3000
+LANGFUSE_HOST=http://localhost:3001
 ```
+
+> ⚠️ 3000 端口被本地其他服务占用，Langfuse 改用 **3001** 端口。
 
 ### 6. 验证
 
