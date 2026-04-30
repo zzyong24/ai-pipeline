@@ -52,6 +52,8 @@ from subgraphs.transcribe_subgraph import build_transcribe_subgraph, TranscribeS
 from subgraphs.transcribe_subgraph.config import TranscribeConfig
 from subgraphs.write_book_subgraph import build_write_book_subgraph, WriteBookState
 from subgraphs.write_book_subgraph.config import WriteBookConfig
+from subgraphs.routing_subgraph import build_routing_subgraph, RoutingState
+from subgraphs.routing_subgraph.config import RoutingConfig, RoutingRule
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -101,7 +103,14 @@ class PipelineState(TypedDict, total=False):
     book_draft: Optional[str]
     output_files: Optional[Dict[str, str]]
 
-    # ───────────── ⑦ 错误 ─────────────
+    # ───────────── ⑦ routing + vault 产出 ─────────────
+    route_decision: Optional[Dict[str, Any]]  # routing_subgraph 输出
+    vault_saved: bool                          # 是否已落库
+
+    # ───────────── ⑧ 透传 ─────────────
+    _trace_span: Optional[Any]                 # Langfuse trace（预留接口）
+
+    # ───────────── ⑨ 错误 ─────────────
     error: Optional[str]
 
 
@@ -255,7 +264,7 @@ def node_research(state: PipelineState) -> Dict[str, Any]:
         return {"step": "error", "error": "topic 为空"}
 
     # 调 SubGraph（模式 2：独立 Schema）
-    sub_input: ResearchState = {"topic": topic}
+    sub_input: ResearchState = {"topic": topic, "_trace_span": state.get("_trace_span")}
     sub_result = _get_research_subgraph().invoke(sub_input)
 
     if sub_result.get("error"):
@@ -378,6 +387,7 @@ def route_dispatcher(state: PipelineState):
                 "video": video,
                 "idx": len(dispatched) + i,
                 "topic": state.get("topic", ""),
+                "_trace_span": state.get("_trace_span"),
             },
         )
         for i, video in enumerate(pending)
@@ -422,6 +432,7 @@ def node_transcribe_single(sub_state: Dict[str, Any]) -> Dict[str, Any]:
         "video_url": video,
         "task_idx": idx,
         "topic": topic,
+        "_trace_span": sub_state.get("_trace_span"),
     }
 
     try:
@@ -495,6 +506,7 @@ def node_write_book(state: PipelineState) -> Dict[str, Any]:
     sub_input: WriteBookState = {
         "topic": topic,
         "summaries": summaries,
+        "_trace_span": state.get("_trace_span"),
     }
 
     try:
@@ -511,7 +523,93 @@ def node_write_book(state: PipelineState) -> Dict[str, Any]:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 编排节点 7: notify (Pipeline 特有的输出+通知)
+# 编排节点 7: route_content (调 routing_subgraph)
+# ═════════════════════════════════════════════════════════════════════════════
+_routing_subgraph = None
+
+
+def _get_routing_subgraph():
+    """单例：构建 routing_subgraph。
+
+    规则集为 video-md Pipeline 定制，覆盖常见的视频/播客/论文/教程/代码来源。
+    """
+    global _routing_subgraph
+    if _routing_subgraph is None:
+        _routing_subgraph = build_routing_subgraph(RoutingConfig(rules=[
+            RoutingRule(source_type="video",   content_type="study_doc",      topic="reading"),
+            RoutingRule(source_type="podcast", content_type="study_doc",      topic="reading"),
+            RoutingRule(keywords=["论文", "研究", "实验", "数据集"],
+                        content_type="knowledge_card", topic="ai"),
+            RoutingRule(keywords=["教程", "手册", "实战", "指南"],
+                        content_type="study_doc",      topic="reading"),
+            RoutingRule(domain="github.com",   content_type="note",           topic="dev"),
+        ]))
+    return _routing_subgraph
+
+
+def node_route_content(state: PipelineState) -> Dict[str, Any]:
+    """调 routing_subgraph，把 RouteDecision 写回主 State。"""
+    sub_input: RoutingState = {
+        "title": state.get("topic", ""),
+        "summary": (state.get("book_draft") or "")[:500],
+        "source_type": "video",
+        "source_url": (state.get("approved_videos") or [""])[0],
+        "_trace_span": state.get("_trace_span"),
+    }
+    sub_result = _get_routing_subgraph().invoke(sub_input)
+    decision = sub_result.get("route_decision")
+    method = sub_result.get("match_method", "rule")
+    print(f"[main:route_content] -> {decision} (method={method})")
+    return {"route_decision": decision}
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 编排节点 8: save_to_vault (根据路由决策落库)
+# ═════════════════════════════════════════════════════════════════════════════
+def node_save_to_vault(state: PipelineState) -> Dict[str, Any]:
+    """根据 RouteDecision 生成规范 frontmatter，写入 vault 目录。
+
+    TODO: 当前直接写文件，后续替换为 ThirdSpace MCP 调用。
+    """
+    import datetime
+
+    decision = state.get("route_decision")
+    book = state.get("book_draft") or ""
+    topic_name = state.get("topic", "")
+
+    if not decision:
+        print("[main:save_to_vault] 无路由决策，跳过落库")
+        return {"vault_saved": False}
+
+    content_type = decision.get("content_type", "study_doc")
+    topic = decision.get("topic", "reading")
+    tags = decision.get("tags", [])
+    today = datetime.date.today().isoformat()
+
+    frontmatter = f"""---
+title: {topic_name}
+date: {today}
+type: {content_type}
+topic: {topic}
+tags: {tags}
+status: draft
+source: ai-pipeline/01-video-md
+---
+
+"""
+
+    # 写到本地 output/vault/ 目录（与 ThirdSpace 打通前的临时目录）
+    safe_topic = "".join(c if c.isalnum() or c in " -_" else "_" for c in topic_name)[:20]
+    vault_out = OUTPUT_BASE / "vault" / topic / f"{today}_{safe_topic}.md"
+    vault_out.parent.mkdir(parents=True, exist_ok=True)
+    vault_out.write_text(frontmatter + book, encoding="utf-8")
+    print(f"[main:save_to_vault] 已写入: {vault_out}")
+
+    return {"vault_saved": True}
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 编排节点 9: notify (Pipeline 特有的输出+通知)
 # ═════════════════════════════════════════════════════════════════════════════
 def node_notify(state: PipelineState) -> Dict[str, Any]:
     topic = state.get("topic", "")
@@ -552,6 +650,8 @@ def build_graph():
     builder.add_node("dispatcher", node_dispatcher)
     builder.add_node("transcribe_single", node_transcribe_single)
     builder.add_node("write_book_node", node_write_book)
+    builder.add_node("route_content", node_route_content)
+    builder.add_node("save_to_vault", node_save_to_vault)
     builder.add_node("notify", node_notify)
 
     builder.add_edge(START, "research")
@@ -576,7 +676,9 @@ def build_graph():
         {"write_book_node": "write_book_node"},
     )
 
-    builder.add_edge("write_book_node", "notify")
+    builder.add_edge("write_book_node", "route_content")
+    builder.add_edge("route_content", "save_to_vault")
+    builder.add_edge("save_to_vault", "notify")
     builder.add_edge("notify", END)
 
     return builder.compile(checkpointer=_get_checkpointer(), debug=False)
@@ -593,6 +695,41 @@ def get_app():
     if _app is None:
         _app = build_graph()
     return _app
+
+
+def run_pipeline(topic: str, thread_id: str, initial_videos: list = None):
+    """启动 Pipeline，自动创建 Langfuse trace。"""
+    from subgraphs.shared.observability import create_trace, flush_trace
+
+    trace = create_trace(
+        name="video-md-pipeline",
+        session_id=thread_id,
+        metadata={"topic": topic}
+    )
+
+    initial: PipelineState = {
+        "topic": topic,
+        "thread_id": thread_id,
+        "_trace_span": trace,
+        "research_results": None,
+        "pending_videos": initial_videos or [],
+        "completed_videos": [],
+        "failed_videos": [],
+        "summaries": [],
+        "_dispatched": [],
+        "book_draft": None,
+        "output_files": None,
+        "step": "idle",
+        "error": None,
+        "review_status": "pending",
+        "approved_videos": [],
+        "rejected_videos": [],
+    }
+
+    config = {"configurable": {"thread_id": thread_id}}
+    result = get_app().invoke(initial, config)
+    flush_trace(trace)
+    return result
 
 
 def list_threads():

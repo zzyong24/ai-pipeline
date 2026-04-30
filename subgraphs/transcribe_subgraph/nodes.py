@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Dict, Any
 
 from ..shared.timeout import with_timeout
+from ..shared.observability import obs_span
 from .state import TranscribeState
 from .config import TranscribeConfig
 
@@ -151,6 +152,7 @@ def make_summarize_node(config: TranscribeConfig):
 
         _ensure_tools_loaded(config.tools_src)
         out_dir = _task_dir(config, idx)
+        trace_span = state.get("_trace_span")
 
         try:
             from whisper_summarizer import summarize  # type: ignore
@@ -159,7 +161,9 @@ def make_summarize_node(config: TranscribeConfig):
             def _do_summarize():
                 return summarize(srt_path, output_path=str(out_dir / "summary.json"))
 
-            result = _do_summarize()
+            with obs_span(trace_span, "transcribe/summarize") as s:
+                result = _do_summarize()
+
             summary_text = result.get("summary", "")
             print(f"[transcribe:{idx}] 总结完成，长度: {len(summary_text)}")
 

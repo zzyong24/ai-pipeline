@@ -49,3 +49,11 @@ class ResearchState(TypedDict, total=False):
     - 类型：Optional[str]
     - 默认值：None
     """
+
+    # ───────────── ④ 可观测（透传） ─────────────
+    _trace_span: Optional[Any]
+    """Langfuse trace/span 对象（透传用，不参与业务）
+    - 含义：由主 Graph 创建并透传，SubGraph 用于埋点
+    - 类型：Optional[Any]
+    - 默认值：None
+    """

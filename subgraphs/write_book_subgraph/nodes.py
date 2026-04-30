@@ -29,6 +29,7 @@ def make_aggregate_node(config: WriteBookConfig):
 
     def aggregate_node(state: WriteBookState) -> Dict[str, Any]:
         summaries = state.get("summaries", [])
+        trace_span = state.get("_trace_span")
         print(f"[write_book:aggregate] 整合 {len(summaries)} 个视频摘要...")
 
         if not summaries:
@@ -50,7 +51,10 @@ def make_aggregate_node(config: WriteBookConfig):
 
 只需返回报告正文。"""
 
-            integrated = llm_minimax(prompt, timeout=max(10, config.timeout_aggregate - 10))
+            integrated = llm_minimax(
+                prompt, timeout=max(10, config.timeout_aggregate - 10),
+                trace_span=trace_span, generation_name="write_book/aggregate",
+            )
             print(f"[write_book:aggregate] 整合完成，长度: {len(integrated)}")
             return {"integrated_report": integrated}
 
@@ -74,6 +78,7 @@ def make_write_node(config: WriteBookConfig):
     def write_node(state: WriteBookState) -> Dict[str, Any]:
         topic = state.get("topic", "")
         draft = state.get("integrated_report") or ""
+        trace_span = state.get("_trace_span")
         print(f"[write_book:write] 生成书稿...")
 
         if not draft:
@@ -90,7 +95,10 @@ def make_write_node(config: WriteBookConfig):
 
 请生成书籍目录结构和各章节详细内容，至少 {config.min_chapters} 章，每章有实质性内容。总字数不少于 {config.min_words} 字。只需返回书籍正文。"""
 
-            book = llm_minimax(prompt, timeout=max(10, config.timeout_write - 10))
+            book = llm_minimax(
+                prompt, timeout=max(10, config.timeout_write - 10),
+                trace_span=trace_span, generation_name="write_book/write",
+            )
             print(f"[write_book:write] 书稿完成，长度: {len(book)}")
             return {"book": book, "error": None}
 

@@ -6,7 +6,7 @@
   ③ 输出字段：父 Graph 要的
 """
 from __future__ import annotations
-from typing import TypedDict, Optional
+from typing import TypedDict, Optional, Any
 
 
 class TranscribeState(TypedDict, total=False):
@@ -70,5 +70,13 @@ class TranscribeState(TypedDict, total=False):
     """错误信息
     - 含义：失败时的 reason，None 表示成功
     - 类型：Optional[str]
+    - 默认值：None
+    """
+
+    # ───────────── ④ 可观测（透传） ─────────────
+    _trace_span: Optional[Any]
+    """Langfuse trace/span 对象（透传用，不参与业务）
+    - 含义：由主 Graph 创建并透传，SubGraph 用于埋点
+    - 类型：Optional[Any]
     - 默认值：None
     """

@@ -20,7 +20,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from main_graph import get_app, print_graph, print_state, list_threads, _save_review
+from main_graph import get_app, print_graph, print_state, list_threads, _save_review, run_pipeline
 
 
 def main():
@@ -174,26 +174,7 @@ def main():
     print(f"   模式: {'--urls 注入' if initial_videos else 'LLM 推荐 + 人工审核'}")
     print()
 
-    from main_graph import PipelineState
-    initial: PipelineState = {
-        "topic":            topic,
-        "research_results":  None,
-        "pending_videos":    initial_videos or [],
-        "completed_videos":  [],
-        "failed_videos":     [],
-        "summaries":         [],
-        "_dispatched":       [],
-        "book_draft":        None,
-        "output_files":      None,
-        "step":              "idle",
-        "error":             None,
-        "review_status":     "pending",
-        "approved_videos":   [],
-        "rejected_videos":  [],
-        "thread_id":         thread_id or "default",
-    }
-
-    result = app.invoke(initial, config)
+    result = run_pipeline(topic, thread_id or "default", initial_videos)
     print_state(result)
 
 

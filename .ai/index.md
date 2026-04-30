@@ -1,7 +1,7 @@
 # ai-pipeline — 项目索引
 
 > ⚠️ **维护规则**：每次新增/修改/删除文件后，必须同步更新本索引。
-> 最后更新：2026-04-24
+> 最后更新：2026-04-30
 
 ---
 
@@ -30,61 +30,49 @@
 
 ```
 ai-pipeline/
-├── HERMES_TASK.md              # Hermes 的工程化施工说明书（v1.0）
 ├── README.md                   # 🆕 项目总览（待创建）
+├── requirements.txt            # ✅ 依赖清单
+├── .env.example                # ✅ 环境变量模板
 ├── AGENTS.md / CLAUDE.md       # AI 平台入口
 │
 ├── subgraphs/                  # 🧩 可复用 SubGraph 库（共享给所有 Pipeline）
 │   ├── __init__.py
 │   ├── shared/                 # 共享工具
-│   │   ├── llm.py             # LLM 调用封装
+│   │   ├── llm.py             # LLM 调用封装（含 Langfuse trace_span 埋点）
+│   │   ├── observability.py   # ✅ Langfuse 封装（懒加载，None 安全）
 │   │   └── timeout.py         # 超时工具
 │   ├── research_subgraph/      # 主题 → 候选视频 URL
-│   │   ├── graph.py           # SubGraph 编排
-│   │   ├── nodes.py           # node 实现
-│   │   ├── state.py           # ResearchState 定义
-│   │   ├── config.py          # ResearchConfig
-│   │   ├── test.py            # 独立测试（python -m subgraphs.research_subgraph.test "..."）
-│   │   └── README.md
+│   │   ├── graph.py / nodes.py / state.py / config.py / test.py / README.md
 │   ├── transcribe_subgraph/    # 视频 → 摘要（下载→转录→总结 3 步）
 │   │   └── （同上结构）
-│   └── write_book_subgraph/    # 摘要 → 书稿（聚合→写 2 步）
-│       └── （同上结构）
+│   ├── write_book_subgraph/    # 摘要 → 书稿（聚合→写 2 步）
+│   │   └── （同上结构）
+│   └── routing_subgraph/       # ✅ 内容分类路由（规则+LLM fallback）
+│       ├── graph.py / nodes.py / state.py / config.py / test.py / README.md
+│
+├── tests/                      # ✅ 测试目录
+│   ├── conftest.py             # 全局 fixtures（mock_llm_* 等）
+│   ├── unit/                   # 单元测试（34 项，全部通过）
+│   │   ├── test_observability.py
+│   │   ├── test_llm.py
+│   │   └── test_routing_subgraph.py
+│   └── e2e/                    # 端到端测试
+│       ├── test_langfuse_disabled.py
+│       ├── test_routing_happy_path.py
+│       └── test_routing_llm_fallback.py
 │
 ├── 01-video-md/                # 📼 Pipeline 1：视频→书稿（已完成）
-│   ├── main_graph.py          # 主 Graph（只做编排）
-│   ├── run.py                 # CLI 入口
-│   ├── readme.md              # Pipeline 说明
+│   ├── main_graph.py          # 主 Graph（含 route_content + save_to_vault 节点）
+│   ├── run.py                 # CLI 入口（使用 run_pipeline()）
+│   ├── readme.md
 │   └── tools_src/             # 工具源码（下载/转录/总结）
 │
-├── 02-podcast-md/              # 🆕 Pipeline 2：播客→书稿（roadmap，验证 SubGraph 复用）
+├── 02-podcast-md/              # 🆕 Pipeline 2：播客→书稿（roadmap）
 │
-├── observability/              # 🆕 可观测（roadmap）
-│   ├── langfuse_setup.md      # Langfuse 自部署指南
-│   ├── langfuse_integration.py
-│   └── studio_config.md
+├── observability/              # ✅ 可观测
+│   └── langfuse_setup.md      # Langfuse Docker Compose 自部署指南
 │
-├── mcp_server/                 # 🆕 Pipeline MCP Server（roadmap）
-│   └── server.py              # 暴露 pipelines 给 Hermes
-│
-├── .ai/                        # AI 协作工作区
-│   ├── index.md               # 本文件
-│   ├── changelog.md
-│   ├── review-checklist.md
-│   ├── context-guide.md
-│   ├── glossary.md
-│   ├── known-issues.md        # 从 HERMES_TASK 提取的 roadmap
-│   └── prompts/
-└── .aies/                      # 工作流 + 规范
-    ├── workflow.md
-    ├── config.yaml
-    ├── spec/
-    │   ├── index.md
-    │   ├── architecture.md    # SubGraph 架构约束（本项目最重要）
-    │   ├── code-style.md      # Python / LangGraph 代码风格
-    │   └── ...
-    ├── tasks/                  # 任务目录
-    └── workspace/              # 会话日志
+└── mcp_server/                 # 🆕 Pipeline MCP Server（roadmap）
 ```
 
 ---
@@ -96,7 +84,8 @@ ai-pipeline/
 | `research_subgraph` | `build_research_subgraph(ResearchConfig)` | `{topic: str}` | `{video_urls: [...], selected_videos: [...]}` | LLM 搜索主题相关视频 |
 | `transcribe_subgraph` | `build_transcribe_subgraph(TranscribeConfig)` | `{video_url, task_idx, topic}` | `{success, title, file_path, srt_path, summary, duration}` | 视频下载→转录→摘要 |
 | `write_book_subgraph` | `build_write_book_subgraph(WriteBookConfig)` | `{topic, summaries: [...]}` | `{book: str}` | 摘要聚合 → 生成书稿 |
-| `shared/` | — | — | — | `llm.py` + `timeout.py` 共享工具 |
+| `routing_subgraph` | `build_routing_subgraph(RoutingConfig)` | `{title, summary, source_type, source_url}` | `{route_decision: RouteDecision, match_method}` | ✅ 内容分类路由（规则+LLM fallback） |
+| `shared/` | — | — | — | `llm.py`（含 trace_span）+ `observability.py` + `timeout.py` |
 
 ### 独立测试命令
 

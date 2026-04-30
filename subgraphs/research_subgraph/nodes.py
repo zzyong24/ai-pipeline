@@ -79,11 +79,15 @@ def make_research_node(config: ResearchConfig):
         if not topic:
             return {"error": "topic 不能为空", "selected_videos": [], "video_urls": []}
 
+        trace_span = state.get("_trace_span")
         print(f"[research] 搜集 '{topic}' 相关视频...")
 
         try:
             prompt = _build_search_prompt(topic, config.min_videos, config.max_videos)
-            raw = llm_minimax(prompt, timeout=max(10, config.timeout - 10))
+            raw = llm_minimax(
+                prompt, timeout=max(10, config.timeout - 10),
+                trace_span=trace_span, generation_name="research/search",
+            )
             selected = _parse_llm_output(raw)
             urls = _extract_valid_urls(selected)
 
