@@ -99,6 +99,10 @@ class PipelineState(TypedDict, total=False):
     failed_videos: Annotated[List[str], lambda a, b: a + b]
     summaries: Annotated[List[Dict[str, Any]], lambda a, b: a + b]
 
+    # ───────────── ⑤-b 重试队列 ─────────────
+    # 用 lambda 取最后一个值，允许 fan-out 时多个 None 并发写入
+    _retry_queue: Annotated[Optional[List[str]], lambda a, b: b]
+
     # ───────────── ⑥ write_book 产出 ─────────────
     book_draft: Optional[str]
     output_files: Optional[Dict[str, str]]
@@ -375,16 +379,38 @@ def node_dispatcher(state: PipelineState) -> Dict[str, Any]:
 def route_dispatcher(state: PipelineState):
     """List[Send] 只能从 conditional edge 返回。
 
-    并发控制：每批最多 TRANSCRIBE_CONCURRENCY 个，保守取 cpu_count // 2。
-    transcribe_single 完成后回到 dispatcher，dispatcher 再发下一批，
-    避免全量并发抢 CPU 导致 Whisper 超时。
+    优先级：
+    1. _retry_queue（由 retry 命令注入，重试失败视频）
+    2. pending_videos 中未分发的（正常流程）
+    3. 两者都空 → write_book_node
+
+    并发控制：每批最多 cpu_count // 2 个（8核→4），避免 Whisper 超时。
     """
     import os
-    # 保守并发数：cpu_count // 2，最少 1，最多 4
-    # 8 核机器 → 4；4 核 → 2；留一半给系统和下载
     cpu = os.cpu_count() or 4
     batch_size = max(1, min(cpu // 2, 4))
 
+    # 优先消费重试队列
+    retry_queue = state.get("_retry_queue") or []
+    if retry_queue:
+        batch = retry_queue[:batch_size]
+        remaining = len(retry_queue) - len(batch)
+        print(f"[main:route] ♻️  重试队列：本批 {len(batch)} 个（剩余 {remaining} 个）")
+        return [
+            Send(
+                "transcribe_single",
+                {
+                    "video": video,
+                    "idx": len(state.get("_dispatched", [])) + i,
+                    "topic": state.get("topic", ""),
+                    "_trace_span": state.get("_trace_span"),
+                    "_is_retry": True,
+                },
+            )
+            for i, video in enumerate(batch)
+        ]
+
+    # 正常流程：pending_videos 中未分发的
     dispatched = set(state.get("_dispatched", []))
     pending = [v for v in state.get("pending_videos", []) if v not in dispatched]
 
@@ -392,7 +418,6 @@ def route_dispatcher(state: PipelineState):
         print("[main:route] 无待处理视频，进入 write_book")
         return "write_book_node"
 
-    # 本批只取 batch_size 条
     batch = pending[:batch_size]
     remaining = len(pending) - len(batch)
     print(f"[main:route] 本批分发 {len(batch)} 个（剩余 {remaining} 个待下批），"
@@ -408,7 +433,7 @@ def route_dispatcher(state: PipelineState):
                 "_trace_span": state.get("_trace_span"),
             },
         )
-        for i, video in enumerate(batch)   # 只发本批，不是全量 pending
+        for i, video in enumerate(batch)
     ]
 
 
@@ -426,10 +451,11 @@ def _get_transcribe_subgraph():
         _transcribe_subgraph = build_transcribe_subgraph(
             TranscribeConfig(
                 timeout_download=300,
-                timeout_transcribe=300,
+                timeout_transcribe=600,   # 字幕优先后只有无字幕视频走 Whisper，给足时间
                 timeout_summarize=120,
                 output_base=OUTPUT_TRANSCRIBE,
                 tools_src=TOOLS_SRC,
+                use_subtitle_first=True,
             )
         )
     return _transcribe_subgraph
@@ -440,10 +466,12 @@ def node_transcribe_single(sub_state: Dict[str, Any]) -> Dict[str, Any]:
 
     父传入的是 Send 的 payload: {"video": url, "idx": N, "topic": str}
     返回主 State 需要的：completed_videos / summaries / failed_videos / _dispatched
+    重试时还返回 _retry_queue（移除已处理项）
     """
     video = sub_state["video"]
     idx = sub_state.get("idx", 0)
     topic = sub_state.get("topic", "")
+    is_retry = sub_state.get("_is_retry", False)
 
     # 父 → 子 State 映射
     sub_input: TranscribeState = {
@@ -457,25 +485,31 @@ def node_transcribe_single(sub_state: Dict[str, Any]) -> Dict[str, Any]:
         sub_result = _get_transcribe_subgraph().invoke(sub_input)
     except Exception as e:
         print(f"[main:transcribe:{idx}] SubGraph 调用异常: {e}")
-        return {
+        result = {
             "completed_videos": [],
             "failed_videos": [video],
             "_dispatched": [video],
         }
+        if is_retry:
+            result["_retry_queue"] = None   # 清空重试队列（由 dispatcher 驱动下批）
+        return result
 
     # 子 → 父 State 映射
     if not sub_result.get("success"):
         print(f"[main:transcribe:{idx}] 失败: {sub_result.get('error')}")
-        return {
+        result = {
             "completed_videos": [],
             "failed_videos": [video],
             "_dispatched": [video],
         }
+        if is_retry:
+            result["_retry_queue"] = None
+        return result
 
     summary_text = sub_result.get("summary", "")
     title = sub_result.get("title") or video
 
-    return {
+    result = {
         "completed_videos": [{
             "url": video,
             "title": title,
@@ -492,6 +526,9 @@ def node_transcribe_single(sub_state: Dict[str, Any]) -> Dict[str, Any]:
         "failed_videos": [],
         "_dispatched": [video],
     }
+    if is_retry:
+        result["_retry_queue"] = None
+    return result
 
 
 # ═════════════════════════════════════════════════════════════════════════════

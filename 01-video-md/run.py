@@ -10,6 +10,7 @@
   ./run.py start --topic "AI Agent" --urls "https://...,https://..."
   ./run.py status --thread-id my-thread        查看状态
   ./run.py continue --thread-id my-thread     继续被中断的 pipeline
+  ./run.py retry --thread-id my-thread        重试失败的视频（LangGraph 原生重试）
   ./run.py approve --thread-id my-thread      批准当前待审核视频（全部通过）
   ./run.py reject --thread-id my-thread       拒绝当前待审核视频（全部拒绝）
   ./run.py modify --thread-id my-thread --approved "url1,url2"  自定义批准列表
@@ -69,12 +70,12 @@ def main():
         else:
             i += 1
 
-    if cmd not in ("start", "status", "continue", "approve", "reject", "modify"):
+    if cmd not in ("start", "status", "continue", "approve", "reject", "modify", "retry"):
         print(f"未知命令: {cmd}")
         print(__doc__)
         sys.exit(1)
 
-    if cmd in ("status", "continue", "approve", "reject", "modify") and not thread_id:
+    if cmd in ("status", "continue", "approve", "reject", "modify", "retry") and not thread_id:
         print(f"❌ {cmd} 需要 --thread-id")
         sys.exit(1)
 
@@ -156,6 +157,34 @@ def main():
             state = app.get_state(config)
             if state and state.values.get("topic"):
                 print_state(state.values)
+        return
+
+    # ── retry ─────────────────────────────────────────────────────────────
+    if cmd == "retry":
+        state = app.get_state(config)
+        if not state or not state.values.get("topic"):
+            print(f"❌ Thread '{thread_id}' 不存在")
+            sys.exit(1)
+
+        failed = state.values.get("failed_videos", [])
+        if not failed:
+            print("✅ 没有失败的视频，无需重试")
+            print_state(state.values)
+            return
+
+        print(f"♻️  重试 {len(failed)} 个失败视频（thread: {thread_id}）")
+        for v in failed:
+            print(f"  - {v[:70]}")
+
+        # 注入 _retry_queue，重置 step 为 transcribing
+        # 用 update_state 更新 dispatcher 节点之前的位置让图继续执行
+        app.update_state(config, {
+            "_retry_queue": failed,
+            "step": "transcribing",
+        }, as_node="dispatcher")
+
+        result = app.invoke(None, config)
+        print_state(result)
         return
 
     # ── start ─────────────────────────────────────────────────────────────

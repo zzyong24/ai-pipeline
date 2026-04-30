@@ -39,17 +39,17 @@ def make_aggregate_node(config: WriteBookConfig):
         summaries_text = _format_summaries(summaries)
 
         try:
-            prompt = f"""你是一个专业的内容整合专家。请将以下多个视频的总结整合成一份结构化的综合报告：
+            prompt = f"""你是一个专业的内容整合专家。以下是多个视频的内容摘要，请整合成一份结构清晰的综合分析：
 
 {summaries_text}
 
-请按以下格式输出：
-## 综合主题
-## 核心观点（按主题分类）
-## 各部分详细内容
-## 行动建议
+输出格式：
+## 核心主题
+## 关键洞察（跨视频提炼，不要重复各视频的摘要）
+## 各角度详细分析
+## 可落地的行动建议
 
-只需返回报告正文。"""
+直接输出内容，不要加任何元说明（如"以下是报告"之类的话）。"""
 
             integrated = llm_minimax(
                 prompt, timeout=max(10, config.timeout_aggregate - 10),
@@ -86,14 +86,16 @@ def make_write_node(config: WriteBookConfig):
             return {"book": f"（主题：{topic}，无可用摘要，内容待补充）"}
 
         try:
-            prompt = f"""你是一个专业作家。请将以下草稿扩展成一本结构完整、内容翔实的电子书。
-
-主题：{topic}
+            prompt = f"""基于以下内容草稿，围绕主题「{topic}」生成一份结构完整、内容充实的深度分析文档。
 
 草稿：
 {draft}
 
-请生成书籍目录结构和各章节详细内容，至少 {config.min_chapters} 章，每章有实质性内容。总字数不少于 {config.min_words} 字。只需返回书籍正文。"""
+要求：
+- 至少 {config.min_chapters} 个主要章节，每章有实质性内容
+- 总字数不少于 {config.min_words} 字
+- 行文直接，聚焦洞察和分析，不要用"本文""本文档""笔者"等自我指涉表达
+- 直接输出文档正文，不要加前言或元说明"""
 
             book = llm_minimax(
                 prompt, timeout=max(10, config.timeout_write - 10),
