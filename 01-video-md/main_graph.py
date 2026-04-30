@@ -242,8 +242,10 @@ def _get_research_subgraph():
     if _research_subgraph is None:
         _research_subgraph = build_research_subgraph(
             ResearchConfig(
-                timeout=120,
+                timeout=30,
                 output_dir=OUTPUT_RESEARCH,
+                max_videos=8,
+                min_score=100,   # 过滤掉播放量过低的视频
             )
         )
     return _research_subgraph
