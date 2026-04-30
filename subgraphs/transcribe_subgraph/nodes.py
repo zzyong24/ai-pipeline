@@ -148,17 +148,30 @@ def make_download_node(config: TranscribeConfig):
 
         out_dir = _task_dir(config, idx)
 
+        # ── 路径 0：目录已有 srt，直接复用，跳过一切 ──────────────────────
+        existing_srts = list(out_dir.glob("*.srt"))
+        if existing_srts:
+            srt_path = str(existing_srts[0])
+            print(f"[transcribe:{idx}] ♻️  复用已有 srt，直接进入 summarize: {existing_srts[0].name[:50]}")
+            return {
+                "file_path": "",
+                "subtitle_path": srt_path,
+                "srt_path": srt_path,
+                "download_method": "cached",
+                "title": existing_srts[0].stem[:50],
+                "duration": 0,
+            }
+
         # ── 路径 1：opencli 字幕优先（B 站 + 已开启字幕优先） ──────────────
         if config.use_subtitle_first and "bilibili.com" in video_url:
             print(f"[transcribe:{idx}] 尝试 opencli 字幕: {video_url[:60]}")
             srt_path = _opencli_get_subtitle(video_url, config, out_dir, idx)
             if srt_path:
-                # 有字幕：跳过下载和 Whisper，直接带 srt_path 返回
                 bvid = _extract_bvid(video_url) or video_url
                 return {
                     "file_path": "",
                     "subtitle_path": srt_path,
-                    "srt_path": srt_path,           # 直接设置，transcribe node 会检测到跳过
+                    "srt_path": srt_path,
                     "download_method": "subtitle",
                     "title": bvid,
                     "duration": 0,

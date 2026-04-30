@@ -102,6 +102,7 @@ class PipelineState(TypedDict, total=False):
     # ───────────── ⑤-b 重试队列 ─────────────
     # 用 lambda 取最后一个值，允许 fan-out 时多个 None 并发写入
     _retry_queue: Annotated[Optional[List[str]], lambda a, b: b]
+    _retry_idx_map: Annotated[Optional[Dict[str, int]], lambda a, b: b]  # url → 原始 idx
 
     # ───────────── ⑥ write_book 产出 ─────────────
     book_draft: Optional[str]
@@ -393,6 +394,7 @@ def route_dispatcher(state: PipelineState):
     # 优先消费重试队列
     retry_queue = state.get("_retry_queue") or []
     if retry_queue:
+        retry_idx_map = state.get("_retry_idx_map") or {}
         batch = retry_queue[:batch_size]
         remaining = len(retry_queue) - len(batch)
         print(f"[main:route] ♻️  重试队列：本批 {len(batch)} 个（剩余 {remaining} 个）")
@@ -401,7 +403,8 @@ def route_dispatcher(state: PipelineState):
                 "transcribe_single",
                 {
                     "video": video,
-                    "idx": len(state.get("_dispatched", [])) + i,
+                    # 用原始 idx，确保指向已有 srt 的目录
+                    "idx": retry_idx_map.get(video, len(state.get("_dispatched", [])) + i),
                     "topic": state.get("topic", ""),
                     "_trace_span": state.get("_trace_span"),
                     "_is_retry": True,

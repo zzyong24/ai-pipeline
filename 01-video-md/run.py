@@ -167,19 +167,33 @@ def main():
             sys.exit(1)
 
         failed = state.values.get("failed_videos", [])
+        # 去重（累加 reducer 可能重复）
+        failed = list(dict.fromkeys(failed))
         if not failed:
             print("✅ 没有失败的视频，无需重试")
             print_state(state.values)
             return
 
-        print(f"♻️  重试 {len(failed)} 个失败视频（thread: {thread_id}）")
-        for v in failed:
-            print(f"  - {v[:70]}")
+        # 从 _dispatched 列表推算每个 URL 首次出现的 idx（原始任务目录）
+        dispatched = state.values.get("_dispatched", [])
+        url_to_idx = {}
+        for i, url in enumerate(dispatched):
+            if url not in url_to_idx:   # 只取首次出现的 idx
+                url_to_idx[url] = i
 
-        # 注入 _retry_queue，重置 step 为 transcribing
-        # 用 update_state 更新 dispatcher 节点之前的位置让图继续执行
+        # 只重试真正失败（且有原始 idx）的视频
+        retry_items = [
+            {"url": url, "original_idx": url_to_idx.get(url, i)}
+            for i, url in enumerate(failed)
+        ]
+
+        print(f"♻️  重试 {len(retry_items)} 个失败视频（复用原始 task 目录）")
+        for item in retry_items:
+            print(f"  - task-{item['original_idx']} {item['url'][:60]}")
+
         app.update_state(config, {
-            "_retry_queue": failed,
+            "_retry_queue": [item["url"] for item in retry_items],
+            "_retry_idx_map": {item["url"]: item["original_idx"] for item in retry_items},
             "step": "transcribing",
         }, as_node="dispatcher")
 
