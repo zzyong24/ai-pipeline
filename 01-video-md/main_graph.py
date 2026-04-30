@@ -54,6 +54,8 @@ from subgraphs.write_book_subgraph import build_write_book_subgraph, WriteBookSt
 from subgraphs.write_book_subgraph.config import WriteBookConfig
 from subgraphs.routing_subgraph import build_routing_subgraph, RoutingState
 from subgraphs.routing_subgraph.config import RoutingConfig, RoutingRule
+from subgraphs.filter_subgraph import build_filter_subgraph, FilterState, FilterConfig
+from subgraphs.text_extract_subgraph import build_text_extract_subgraph, TextExtractState, TextExtractConfig
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -115,7 +117,14 @@ class PipelineState(TypedDict, total=False):
     # ───────────── ⑧ 透传 ─────────────
     _trace_span: Optional[Any]                 # Langfuse trace（预留接口）
 
-    # ───────────── ⑨ 错误 ─────────────
+    # ───────────── ⑨ 多源支持 ─────────────
+    sources: Optional[List[str]]               # 配置的来源列表，如 ["bilibili","hackernews"]
+    source_items: Annotated[List[Dict], lambda a, b: a + b]  # research 产出的统一条目
+    approved_items: Annotated[List[Dict], lambda a, b: b if b is not None else a]  # filter 通过的条目
+    text_summaries: Annotated[List[Dict], lambda a, b: a + b]  # text_extract 产出
+    filter_log: Optional[List[Dict]]           # filter 日志
+
+    # ───────────── ⑩ 错误 ─────────────
     error: Optional[str]
 
 
@@ -259,11 +268,18 @@ def _get_research_subgraph():
 def node_research(state: PipelineState) -> Dict[str, Any]:
     # --urls 注入时跳过 research
     if state.get("pending_videos") and not state.get("research_results"):
-        print(f"[main:research] 跳过（已有 {len(state['pending_videos'])} 个视频由 --urls 注入）")
+        urls = state["pending_videos"]
+        print(f"[main:research] 跳过（已有 {len(urls)} 个视频由 --urls 注入）")
+        # 构建 source_items 以便 filter 使用
+        source_items = [
+            {"source_type": "bilibili", "title": url, "url": url, "author": "", "text_content": "", "score": 0}
+            for url in urls
+        ]
         return {
-            "step": "awaiting_review",
+            "step": "transcribing",
             "review_status": "none",
             "_dispatched": [],
+            "source_items": source_items,
         }
 
     topic = state.get("topic", "").strip()
@@ -284,12 +300,62 @@ def node_research(state: PipelineState) -> Dict[str, Any]:
     return {
         "research_results": {"topic": topic, "selected_videos": selected},
         "pending_videos": urls,
+        "source_items": sub_result.get("source_items", []),
+        "sources": state.get("sources"),
         "step": "awaiting_review",
         "review_status": "pending",
         "_dispatched": [],
         "approved_videos": [],
         "rejected_videos": [],
     }
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 编排节点 1.5: filter 胶水层（AI 相关性过滤，替代 HITL）
+# ═════════════════════════════════════════════════════════════════════════════
+_filter_subgraph = None
+
+
+def _get_filter_subgraph():
+    global _filter_subgraph
+    if _filter_subgraph is None:
+        _filter_subgraph = build_filter_subgraph(FilterConfig(timeout=90))
+    return _filter_subgraph
+
+
+def node_filter(state: PipelineState) -> Dict[str, Any]:
+    """AI 相关性过滤节点，替代 HITL。"""
+    topic = state.get("topic", "")
+    source_items = state.get("source_items", [])
+    # 向后兼容：source_items 为空时，把 pending_videos 转为 bilibili 条目
+    if not source_items:
+        video_urls = state.get("pending_videos") or []
+        source_items = [
+            {"source_type": "bilibili", "title": url, "url": url, "author": "", "text_content": "", "score": 0}
+            for url in video_urls
+        ]
+
+    print(f"[main:filter] 开始 AI 过滤，{len(source_items)} 个候选...")
+    sub_input = {"topic": topic, "candidates": source_items, "_trace_span": state.get("_trace_span")}
+    try:
+        sub_result = _get_filter_subgraph().invoke(sub_input)
+        approved = sub_result.get("approved_items", source_items)  # 失败时兜底保留全部
+        rejected = sub_result.get("rejected_items", [])
+        filter_log = sub_result.get("filter_log", [])
+        print(f"[main:filter] 完成：通过 {len(approved)} / {len(source_items)}")
+        return {
+            "approved_items": approved,
+            "pending_videos": [i["url"] for i in approved if i.get("source_type") == "bilibili"],
+            "filter_log": filter_log,
+            "step": "transcribing",
+        }
+    except Exception as e:
+        print(f"[main:filter] 失败，兜底保留所有: {e}")
+        return {
+            "approved_items": source_items,
+            "pending_videos": [i["url"] for i in source_items if i.get("source_type") == "bilibili"],
+            "step": "transcribing",
+        }
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -382,13 +448,15 @@ def route_dispatcher(state: PipelineState):
 
     优先级：
     1. _retry_queue（由 retry 命令注入，重试失败视频）
-    2. pending_videos 中未分发的（正常流程）
-    3. 两者都空 → write_book_node
+    2. approved_items 中未分发的（多源分流）
+    3. pending_videos 中未分发的（向后兼容）
+    4. 两者都空 → write_book_node
 
     并发控制：每批最多 cpu_count // 2 个（8核→4），避免 Whisper 超时。
     """
     import os
-    cpu = os.cpu_count() or 4
+    import multiprocessing
+    cpu = multiprocessing.cpu_count()
     batch_size = max(1, min(cpu // 2, 4))
 
     # 优先消费重试队列
@@ -413,12 +481,58 @@ def route_dispatcher(state: PipelineState):
             for i, video in enumerate(batch)
         ]
 
-    # 正常流程：pending_videos 中未分发的
+    # 多源分流：从 approved_items 分发
+    approved_items = state.get("approved_items", [])
     dispatched = set(state.get("_dispatched", []))
+
+    if approved_items:
+        # 过滤掉已分发的
+        undispatched_items = [item for item in approved_items if item.get("url", "") not in dispatched]
+
+        if undispatched_items:
+            batch_items = undispatched_items[:batch_size]
+            remaining = len(undispatched_items) - len(batch_items)
+            print(f"[main:route] 本批分发 {len(batch_items)} 个（剩余 {remaining} 个待下批），"
+                  f"并发数={batch_size}（{cpu} 核 // 2）")
+
+            sends = []
+            for i, item in enumerate(batch_items):
+                src_type = item.get("source_type", "bilibili")
+                url = item.get("url", "")
+                idx = len(dispatched) + i
+
+                if src_type == "bilibili":
+                    sends.append(Send(
+                        "transcribe_single",
+                        {
+                            "video": url,
+                            "idx": idx,
+                            "topic": state.get("topic", ""),
+                            "_trace_span": state.get("_trace_span"),
+                        },
+                    ))
+                else:
+                    sends.append(Send(
+                        "text_extract_single",
+                        {
+                            "source_type": src_type,
+                            "source_url": url,
+                            "title": item.get("title", ""),
+                            "text_content": item.get("text_content", ""),
+                            "author": item.get("author", ""),
+                            "idx": idx,
+                            "topic": state.get("topic", ""),
+                            "_trace_span": state.get("_trace_span"),
+                        },
+                    ))
+
+            return sends if sends else "write_book_node"
+
+    # 向后兼容：pending_videos 中未分发的
     pending = [v for v in state.get("pending_videos", []) if v not in dispatched]
 
     if not pending:
-        print("[main:route] 无待处理视频，进入 write_book")
+        print("[main:route] 无待处理内容，进入 write_book")
         return "write_book_node"
 
     batch = pending[:batch_size]
@@ -532,6 +646,51 @@ def node_transcribe_single(sub_state: Dict[str, Any]) -> Dict[str, Any]:
     if is_retry:
         result["_retry_queue"] = None
     return result
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 编排节点 5.5: text_extract_single_wrapper
+#   - 调 text_extract_subgraph
+#   - 映射父子 State（非视频文本内容）
+# ═════════════════════════════════════════════════════════════════════════════
+_text_extract_subgraph = None
+
+
+def _get_text_extract_subgraph():
+    global _text_extract_subgraph
+    if _text_extract_subgraph is None:
+        _text_extract_subgraph = build_text_extract_subgraph(TextExtractConfig(timeout=90))
+    return _text_extract_subgraph
+
+
+def node_text_extract_single(sub_state: Dict[str, Any]) -> Dict[str, Any]:
+    """文本内容提炼节点（twitter/hackernews/zhihu）。"""
+    idx = sub_state.get("idx", 0)
+    url = sub_state.get("source_url", "")
+    src_type = sub_state.get("source_type", "unknown")
+    print(f"[main:text_extract:{idx}] {src_type} — {url[:60]}")
+
+    try:
+        sub_result = _get_text_extract_subgraph().invoke(sub_state)
+        summary_text = sub_result.get("summary")
+        if summary_text:
+            summary_item = {
+                "video": url,
+                "title": sub_state.get("title", url),
+                "source_type": src_type,
+                "summary": summary_text,
+            }
+            return {
+                "summaries": [summary_item],
+                "completed_videos": [{"url": url, "title": sub_state.get("title", url), "source_type": src_type, "summary": summary_text}],
+                "_dispatched": [url],
+            }
+        else:
+            print(f"[main:text_extract:{idx}] 无 summary: {sub_result.get('error')}")
+            return {"failed_videos": [url], "_dispatched": [url]}
+    except Exception as e:
+        print(f"[main:text_extract:{idx}] 异常: {e}")
+        return {"failed_videos": [url], "_dispatched": [url]}
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -795,7 +954,7 @@ def node_notify(state: PipelineState) -> Dict[str, Any]:
     completed_videos = state.get("completed_videos", [])
 
     safe_topic = "".join(c if c.isalnum() or c in " -_" else "_" for c in topic)[:20]
-    output_file = OUTPUT_BOOK / f"{safe_topic}_参考报告.md"
+    output_file = OUTPUT_BOOK / f"{safe_topic}.md"
     output_file.write_text(f"# {topic}\n\n{book}", encoding="utf-8")
 
     completed = len(completed_videos)
@@ -833,29 +992,33 @@ def build_graph():
     builder = StateGraph(PipelineState)
 
     builder.add_node("research", node_research)
+    builder.add_node("filter", node_filter)
     builder.add_node("send_review_request", node_send_review_request)
     builder.add_node("wait_review", node_wait_review)
     builder.add_node("dispatcher", node_dispatcher)
     builder.add_node("transcribe_single", node_transcribe_single)
+    builder.add_node("text_extract_single", node_text_extract_single)
     builder.add_node("write_book_node", node_write_book)
     builder.add_node("route_content", node_route_content)
     builder.add_node("save_to_vault", node_save_to_vault)
     builder.add_node("notify", node_notify)
 
     builder.add_edge(START, "research")
-    builder.add_edge("research", "send_review_request")
+    builder.add_edge("research", "filter")
+    builder.add_edge("filter", "dispatcher")
 
-    # --urls 跳审核 → dispatcher；正常 → wait_review
-    builder.add_conditional_edges(
-        "send_review_request",
-        lambda s: "dispatcher" if s.get("review_status") == "none" else "wait_review",
-        {"wait_review": "wait_review", "dispatcher": "dispatcher"},
-    )
-
-    builder.add_edge("wait_review", "dispatcher")
+    # HITL 保留但不接入主流程（可由 --urls 模式或手动触发）
+    # builder.add_edge("research", "send_review_request")
+    # builder.add_conditional_edges(
+    #     "send_review_request",
+    #     lambda s: "dispatcher" if s.get("review_status") == "none" else "wait_review",
+    #     {"wait_review": "wait_review", "dispatcher": "dispatcher"},
+    # )
+    # builder.add_edge("wait_review", "dispatcher")
 
     # fan-out 循环
     builder.add_edge("transcribe_single", "dispatcher")
+    builder.add_edge("text_extract_single", "dispatcher")
 
     # dispatcher → conditional edge（返回 Send 列表或下一步名字）
     builder.add_conditional_edges(
@@ -885,7 +1048,7 @@ def get_app():
     return _app
 
 
-def run_pipeline(topic: str, thread_id: str, initial_videos: list = None):
+def run_pipeline(topic: str, thread_id: str, initial_videos: list = None, sources: list = None):
     """启动 Pipeline，自动接入 Langfuse 全链路 trace（v4 最佳实践）。
 
     接入方式：
@@ -917,6 +1080,7 @@ def run_pipeline(topic: str, thread_id: str, initial_videos: list = None):
         initial: PipelineState = {
             "topic": topic,
             "thread_id": thread_id,
+            "sources": sources or ["bilibili"],
             "_trace_span": None,
             "research_results": None,
             "pending_videos": initial_videos or [],
@@ -924,6 +1088,9 @@ def run_pipeline(topic: str, thread_id: str, initial_videos: list = None):
             "failed_videos": [],
             "summaries": [],
             "_dispatched": [],
+            "source_items": [],
+            "approved_items": [],
+            "text_summaries": [],
             "book_draft": None,
             "output_files": None,
             "step": "idle",

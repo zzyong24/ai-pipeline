@@ -1,0 +1,14 @@
+{
+  "builders": [
+    {"handle": "swyx", "name": "swyx", "focus": "AI dev tools"},
+    {"handle": "sama", "name": "Sam Altman", "focus": "AGI"},
+    {"handle": "karpathy", "name": "Andrej Karpathy", "focus": "AI research"},
+    {"handle": "garrytan", "name": "Garry Tan", "focus": "startups"},
+    {"handle": "mattturck", "name": "Matt Turck", "focus": "AI market"},
+    {"handle": "danshipper", "name": "Dan Shipper", "focus": "AI products"},
+    {"handle": "zarazhangrui", "name": "Zara Zhang", "focus": "AI builders"},
+    {"handle": "levie", "name": "Aaron Levie", "focus": "enterprise AI"},
+    {"handle": "ryolu_", "name": "Ryo Lu", "focus": "AI products"},
+    {"handle": "nikunj", "name": "Nikunj Kothari", "focus": "AI applications"}
+  ]
+}

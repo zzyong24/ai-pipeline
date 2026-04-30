@@ -263,6 +263,12 @@ def make_transcribe_node(config: TranscribeConfig):
                 return {"success": False, "error": "转录未返回 srt_path"}
 
             print(f"[transcribe:{idx}] Whisper 转录完成: {srt_path}")
+
+            # 转写完成后自动删除音频文件
+            for audio_file in out_dir.glob("*.m4a"):
+                audio_file.unlink(missing_ok=True)
+                print(f"[transcribe] 🗑 自动删除音频: {audio_file.name}")
+
             return {"srt_path": srt_path}
 
         except TimeoutError as e:

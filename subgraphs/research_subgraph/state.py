@@ -20,6 +20,14 @@ class ResearchState(TypedDict, total=False):
     - 约束：非空字符串
     """
 
+    sources: Optional[List[str]]
+    """多信息源列表
+    - 含义：要搜索的来源平台列表
+    - 类型：Optional[List[str]]
+    - 默认值：None（使用 config.sources）
+    - 可选值：bilibili, hackernews, zhihu, twitter, twitter_builders
+    """
+
     # ───────────── ② 中间字段 ─────────────
     raw_llm_output: Optional[str]
     """LLM 原始输出
@@ -40,6 +48,13 @@ class ResearchState(TypedDict, total=False):
     """候选视频 URL 列表（清洗后）
     - 含义：过滤掉非 bilibili/youtube 的 URL 后的列表
     - 类型：List[str]
+    - 默认值：[]
+    """
+
+    source_items: List[Dict[str, Any]]
+    """统一格式条目（含 source_type, text_content）
+    - 含义：research 产出的所有来源条目，含非视频来源
+    - 类型：List[Dict[str, Any]]
     - 默认值：[]
     """
 

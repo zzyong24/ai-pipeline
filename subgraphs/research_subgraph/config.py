@@ -2,7 +2,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 
 @dataclass
@@ -17,6 +17,9 @@ class ResearchConfig:
       - source:         内容来源，默认 "bilibili"，支持 "bilibili"
       - opencli_bin:    opencli 可执行文件路径，默认 None（自动查找）
       - min_score:      最低播放量/热度过滤阈值，默认 0（不过滤）
+      - sources:        多信息源列表，默认 ["bilibili"]
+      - builders:       Twitter builder handle 列表
+      - builders_config_path: builders.json 文件路径
     """
     timeout: int = 30
     output_dir: Optional[Path] = None
@@ -25,3 +28,6 @@ class ResearchConfig:
     source: str = "bilibili"
     opencli_bin: Optional[str] = None  # None 时自动查找
     min_score: int = 0                 # 过滤低热度视频
+    sources: List[str] = field(default_factory=lambda: ["bilibili"])
+    builders: List[str] = field(default_factory=list)
+    builders_config_path: Optional[Path] = None

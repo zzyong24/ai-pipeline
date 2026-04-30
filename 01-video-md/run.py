@@ -8,6 +8,7 @@
   ./run.py start --topic "远程工作工具"         启动 pipeline（命名参数）
   ./run.py start --topic "远程工作工具" --thread-id my-thread
   ./run.py start --topic "AI Agent" --urls "https://...,https://..."
+  ./run.py start --topic "AI Agent" --sources "bilibili,hackernews,twitter"
   ./run.py status --thread-id my-thread        查看状态
   ./run.py continue --thread-id my-thread     继续被中断的 pipeline
   ./run.py retry --thread-id my-thread        重试失败的视频（LangGraph 原生重试）
@@ -15,6 +16,8 @@
   ./run.py reject --thread-id my-thread       拒绝当前待审核视频（全部拒绝）
   ./run.py modify --thread-id my-thread --approved "url1,url2"  自定义批准列表
   ./run.py list                               列出所有 thread
+
+支持的 sources: bilibili, hackernews, zhihu, twitter, twitter_builders
 """
 import sys
 import os
@@ -51,6 +54,7 @@ def main():
     initial_videos = None
     approved_videos = None   # for modify
     rejected_videos = None   # for reject/modify
+    sources_list   = None    # 多信息源
     argv = sys.argv
     i = 2
     while i < len(argv):
@@ -61,6 +65,8 @@ def main():
             topic = argv[i + 1]; i += 2
         elif arg == "--urls"        and i + 1 < len(argv):
             initial_videos = [v.strip() for v in argv[i + 1].split(",") if v.strip()]; i += 2
+        elif arg == "--sources"    and i + 1 < len(argv):
+            sources_list = [s.strip() for s in argv[i + 1].split(",") if s.strip()]; i += 2
         elif arg == "--approved"    and i + 1 < len(argv):
             approved_videos = [v.strip() for v in argv[i + 1].split(",") if v.strip()]; i += 2
         elif arg == "--rejected"    and i + 1 < len(argv):
@@ -214,10 +220,12 @@ def main():
 
     print(f"\n🚀 启动 Pipeline: {topic}")
     print(f"   thread_id: {thread_id or 'default'}")
-    print(f"   模式: {'--urls 注入' if initial_videos else 'LLM 推荐 + 人工审核'}")
+    print(f"   模式: {'--urls 注入' if initial_videos else 'LLM 推荐 + AI 过滤'}")
+    if sources_list:
+        print(f"   来源: {sources_list}")
     print()
 
-    result = run_pipeline(topic, thread_id or "default", initial_videos)
+    result = run_pipeline(topic, thread_id or "default", initial_videos, sources=sources_list)
     print_state(result)
 
 
