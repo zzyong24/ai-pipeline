@@ -668,31 +668,161 @@ source: ai-pipeline/01-video-md
 
 # ═════════════════════════════════════════════════════════════════════════════
 # 编排节点 9: notify (Pipeline 特有的输出+通知)
+def _generate_source_viz(topic: str, summaries: list, completed_videos: list, output_dir: Path) -> str:
+    """生成来源占比可视化 HTML，返回文件路径。"""
+    import datetime
+
+    # 统计每个来源的字数占比（用 summary 长度作为内容贡献度代理指标）
+    sources = []
+    total_chars = 0
+    for s in summaries:
+        chars = len(s.get("summary", ""))
+        total_chars += chars
+        # 尝试从 completed_videos 匹配更多元数据
+        url = s.get("video", "")
+        title = s.get("title", url[:40])
+        sources.append({"url": url, "title": title, "chars": chars})
+
+    if total_chars == 0:
+        return ""
+
+    # 构建 HTML
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    safe_topic = "".join(c if c.isalnum() or c in " -_" else "_" for c in topic)[:20]
+    html_path = output_dir / f"{safe_topic}_来源分析.html"
+
+    bar_items = ""
+    table_rows = ""
+    colors = ["#4C72B0", "#DD8452", "#55A868", "#C44E52", "#8172B3",
+              "#937860", "#DA8BC3", "#8C8C8C", "#CCB974", "#64B5CD"]
+
+    for i, src in enumerate(sources):
+        pct = round(src["chars"] / total_chars * 100, 1)
+        color = colors[i % len(colors)]
+        short_title = src["title"][:45] + ("…" if len(src["title"]) > 45 else "")
+        bar_items += f"""
+        <div class="bar-row">
+          <div class="bar-label" title="{src['title']}">[{i+1}] {short_title}</div>
+          <div class="bar-wrap">
+            <div class="bar" style="width:{pct}%;background:{color}"></div>
+            <span class="bar-pct">{pct}%</span>
+          </div>
+        </div>"""
+        table_rows += f"""
+        <tr>
+          <td><span class="dot" style="background:{color}">●</span> {i+1}</td>
+          <td><a href="{src['url']}" target="_blank">{short_title}</a></td>
+          <td class="num">{src['chars']:,}</td>
+          <td class="num">{pct}%</td>
+        </tr>"""
+
+    failed_count = len(completed_videos)  # actually completed
+    html = f"""<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>{topic} — 来源分析</title>
+<style>
+  body {{ font-family: -apple-system, "PingFang SC", sans-serif; max-width: 860px; margin: 40px auto; padding: 0 20px; color: #222; }}
+  h1 {{ font-size: 1.4em; border-bottom: 2px solid #4C72B0; padding-bottom: 8px; }}
+  .meta {{ color: #666; font-size: 0.85em; margin-bottom: 24px; }}
+  .section {{ margin: 28px 0; }}
+  h2 {{ font-size: 1.1em; color: #333; margin-bottom: 12px; }}
+  .bar-row {{ display: flex; align-items: center; margin: 6px 0; }}
+  .bar-label {{ width: 280px; font-size: 0.82em; color: #444; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: 10px; }}
+  .bar-wrap {{ flex: 1; display: flex; align-items: center; }}
+  .bar {{ height: 20px; border-radius: 3px; min-width: 2px; transition: width 0.3s; }}
+  .bar-pct {{ margin-left: 8px; font-size: 0.82em; color: #555; width: 40px; }}
+  table {{ width: 100%; border-collapse: collapse; font-size: 0.88em; }}
+  th {{ background: #f0f0f0; padding: 8px 10px; text-align: left; border-bottom: 2px solid #ddd; }}
+  td {{ padding: 7px 10px; border-bottom: 1px solid #eee; vertical-align: top; }}
+  td a {{ color: #4C72B0; text-decoration: none; }}
+  td a:hover {{ text-decoration: underline; }}
+  .num {{ text-align: right; color: #555; }}
+  .dot {{ margin-right: 4px; }}
+  .stat-box {{ display: flex; gap: 20px; flex-wrap: wrap; }}
+  .stat {{ background: #f8f9fa; border-radius: 6px; padding: 12px 18px; }}
+  .stat .n {{ font-size: 1.8em; font-weight: bold; color: #4C72B0; }}
+  .stat .l {{ font-size: 0.82em; color: #666; margin-top: 2px; }}
+</style>
+</head>
+<body>
+<h1>📊 {topic} — 来源分析报告</h1>
+<div class="meta">生成时间：{now} · 共 {len(sources)} 个来源</div>
+
+<div class="section">
+  <div class="stat-box">
+    <div class="stat"><div class="n">{len(sources)}</div><div class="l">来源数量</div></div>
+    <div class="stat"><div class="n">{total_chars:,}</div><div class="l">总内容字符数</div></div>
+    <div class="stat"><div class="n">{round(total_chars/len(sources)):,}</div><div class="l">平均每源字符数</div></div>
+  </div>
+</div>
+
+<div class="section">
+  <h2>内容贡献占比（以摘要字数为代理指标）</h2>
+  {bar_items}
+</div>
+
+<div class="section">
+  <h2>来源明细</h2>
+  <table>
+    <tr><th>#</th><th>来源标题</th><th class="num">字符数</th><th class="num">占比</th></tr>
+    {table_rows}
+  </table>
+</div>
+
+<div class="section">
+  <p style="color:#888;font-size:0.8em">
+    注：占比基于 LLM 摘要字数，反映各来源信息密度，不代表原始视频时长。
+    点击来源标题可直接访问原始链接。
+  </p>
+</div>
+</body>
+</html>"""
+
+    html_path.write_text(html, encoding="utf-8")
+    print(f"[main:notify] 来源分析已保存: {html_path}")
+    return str(html_path)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 编排节点 7: notify (Pipeline 特有的输出+通知)
 # ═════════════════════════════════════════════════════════════════════════════
 def node_notify(state: PipelineState) -> Dict[str, Any]:
     topic = state.get("topic", "")
     book = state.get("book_draft") or ""
+    summaries = state.get("summaries", [])
+    completed_videos = state.get("completed_videos", [])
 
     safe_topic = "".join(c if c.isalnum() or c in " -_" else "_" for c in topic)[:20]
-    output_file = OUTPUT_BOOK / f"{safe_topic}_书稿.md"
+    output_file = OUTPUT_BOOK / f"{safe_topic}_参考报告.md"
     output_file.write_text(f"# {topic}\n\n{book}", encoding="utf-8")
 
-    completed = len(state.get("completed_videos", []))
+    completed = len(completed_videos)
     failed = len(state.get("failed_videos", []))
 
-    print(f"[main:notify] 书稿已保存: {output_file}")
-    print(f"[main:notify] 完成！转录 {completed} 个视频，失败 {failed} 个")
+    # 生成来源占比可视化
+    viz_file = ""
+    if summaries:
+        viz_file = _generate_source_viz(topic, summaries, completed_videos, OUTPUT_BOOK)
+
+    print(f"[main:notify] 参考报告已保存: {output_file}")
+    print(f"[main:notify] 完成！{completed} 个来源，失败 {failed} 个")
+
+    output_files = {"report": str(output_file)}
+    if viz_file:
+        output_files["source_viz"] = viz_file
 
     _feishu_notify(
         f"✅ Pipeline 完成！主题：{topic}\n"
-        f"转录成功：{completed} 个 | 失败：{failed} 个\n"
-        f"书稿：{output_file}",
+        f"来源：{completed} 个 | 失败：{failed} 个\n"
+        f"报告：{output_file}",
         state.get("thread_id", "default"),
     )
 
     return {
         "step": "done",
-        "output_files": {"book": str(output_file)},
+        "output_files": output_files,
     }
 
 
