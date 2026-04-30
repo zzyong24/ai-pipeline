@@ -698,37 +698,61 @@ def get_app():
 
 
 def run_pipeline(topic: str, thread_id: str, initial_videos: list = None):
-    """启动 Pipeline，自动创建 Langfuse trace。"""
-    from subgraphs.shared.observability import create_trace, flush_trace
+    """启动 Pipeline，自动接入 Langfuse 全链路 trace（v4 最佳实践）。
 
-    trace = create_trace(
-        name="video-md-pipeline",
-        session_id=thread_id,
-        metadata={"topic": topic}
+    接入方式：
+    - @observe 装饰器（见下方 _run_pipeline_traced）创建顶层 trace
+    - LangChain CallbackHandler 传入 graph.invoke()，自动 trace 所有节点和 LLM 调用
+    - 未配置 Langfuse 时静默跳过，Pipeline 正常运行
+    """
+    from subgraphs.shared.observability import (
+        get_observe_decorator, get_langfuse_callback,
+        get_current_trace_id, update_current_trace, flush,
     )
 
-    initial: PipelineState = {
-        "topic": topic,
-        "thread_id": thread_id,
-        "_trace_span": trace,
-        "research_results": None,
-        "pending_videos": initial_videos or [],
-        "completed_videos": [],
-        "failed_videos": [],
-        "summaries": [],
-        "_dispatched": [],
-        "book_draft": None,
-        "output_files": None,
-        "step": "idle",
-        "error": None,
-        "review_status": "pending",
-        "approved_videos": [],
-        "rejected_videos": [],
-    }
+    # 用 @observe 包裹核心逻辑，创建顶层 trace
+    observe = get_observe_decorator(name="video-md-pipeline", as_type="span")
 
-    config = {"configurable": {"thread_id": thread_id}}
-    result = get_app().invoke(initial, config)
-    flush_trace(trace)
+    @observe
+    def _run():
+        # 在 @observe 上下文内设置 session_id、topic 元数据
+        update_current_trace(
+            session_id=thread_id,
+            metadata={"topic": topic},
+            tags=["video-md"],
+        )
+
+        # 获取当前 trace ID，传给 CallbackHandler 以关联 LangGraph 子 trace
+        trace_id = get_current_trace_id()
+        handler = get_langfuse_callback(trace_id=trace_id)
+
+        initial: PipelineState = {
+            "topic": topic,
+            "thread_id": thread_id,
+            "_trace_span": None,
+            "research_results": None,
+            "pending_videos": initial_videos or [],
+            "completed_videos": [],
+            "failed_videos": [],
+            "summaries": [],
+            "_dispatched": [],
+            "book_draft": None,
+            "output_files": None,
+            "step": "idle",
+            "error": None,
+            "review_status": "pending",
+            "approved_videos": [],
+            "rejected_videos": [],
+        }
+
+        graph_config: dict = {"configurable": {"thread_id": thread_id}}
+        if handler:
+            graph_config["callbacks"] = [handler]
+
+        return get_app().invoke(initial, graph_config)
+
+    result = _run()
+    flush()   # 确保所有 trace 数据上报
     return result
 
 
