@@ -31,6 +31,18 @@
 
 ---
 
+## Thinking Guides（动手前思维检查）
+
+> 不是规范，是**防踩坑的思维框架**。遇到对应场景花 5 分钟读一遍。
+
+| Guide | 适用场景 |
+|-------|---------|
+| [guides/code-reuse.md](./guides/code-reuse.md) | 新增 SubGraph / Node / 工具函数前，先搜索是否已有类似实现 |
+| [guides/cross-layer.md](./guides/cross-layer.md) | 跨 SubGraph / 主 Graph 调用时，检查依赖方向和 State 边界 |
+| [guides/auth-context.md](./guides/auth-context.md) | 涉及 LLM 配置、Langfuse token、API key 透传时 |
+
+---
+
 ## 开发前必读清单
 
 ```bash
@@ -54,10 +66,9 @@ cat .aies/spec/testing.md            # 测试规范（新增任务时必读）
 📋 任务启动清单
 ━━━━━━━━━━━━━━
 • 任务类型：[新增 SubGraph / 新增 Pipeline / 修改 SubGraph / 修改主 Graph / Bug 修复 / 其他]
-• 需读取的参考文件：[按 .ai/context-guide.md 列出]
-• 涉及的规范要点：[从本目录下各 Spec 列出]
+• 需读取的规范：[读 context.jsonl 的 phase=implement 条目，或按 .ai/context-guide.md]
+• 涉及的 Thinking Guide：[新增组件→code-reuse / 跨层→cross-layer / config透传→auth-context]
 • 预计变更文件：[列出]
-• 索引需更新：[是 / 否]
 • 已知技术债关联：[从 .ai/known-issues.md 查询]
 ```
 
@@ -85,7 +96,12 @@ cat .aies/spec/testing.md            # 测试规范（新增任务时必读）
    - [ ] acceptance.md 中所有 P0 验收场景打勾
 3. 索引更新：[已更新 .ai/index.md / 无需]
 4. 建议 commit message：`type(scope): 描述 [ai-assisted]`
-5. 是否有新约定需沉淀：[有/无]
+5. ⭐ Spec 回流（强制，不可跳过）：
+   Q1: 本次有没有"应该统一规范"的地方？[有/无]
+   Q2: 有没有踩坑（LangGraph 陷阱/Python 边界），下次需要提前规避？[有/无]
+   Q3: spec/guides/ 是否需要新增场景？[有/无]
+   → 有则直接修改对应 spec 文件，在 .ai/changelog.md 追加一行
+   → 无则明确写"Spec 回流：无新约定"
 ```
 
 ---

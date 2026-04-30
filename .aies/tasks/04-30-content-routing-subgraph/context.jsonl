@@ -1,0 +1,6 @@
+{"phase": "implement", "spec": "architecture.md", "reason": "SubGraph 设计约束，routing_subgraph 结构规范"}
+{"phase": "implement", "spec": "code-style.md", "reason": "Python/LangGraph 命名和类型规范"}
+{"phase": "implement", "spec": "guides/code-reuse.md", "reason": "新增 vault 落库逻辑前，先搜索是否已有类似实现"}
+{"phase": "implement", "spec": "guides/cross-layer.md", "reason": "SubGraph 与主 Graph 的 State 边界检查"}
+{"phase": "check", "spec": "quality-gates.md", "reason": "质量门：SubGraph 独立性/Reducer/LangGraph 陷阱"}
+{"phase": "check", "spec": "error-handling.md", "reason": "SubGraph 异常传递规范"}

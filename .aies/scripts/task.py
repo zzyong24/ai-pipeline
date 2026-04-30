@@ -4,12 +4,22 @@
 任务管理脚本。
 
 子命令：
-    create <title> [--slug <slug>] [--priority P0|P1|P2|P3]
-        创建任务，生成 .aies/tasks/{MM-DD-slug}/task.json
+    create <title> [--slug <slug>] [--priority P0|P1|P2|P3] [--confirmed]
+        创建任务。--confirmed 表示 prd/acceptance 已由人确认，可直接进入自驱模式。
     list
-        列出活跃任务
+        列出活跃任务（含 checkpoint 状态）
     list-archive
         列出已归档任务
+    start <slug>
+        将任务从 planning 推进到 in_progress，初始化 checkpoint.md
+    checkpoint <slug> --step <step> --summary <text> [--next <next_step>]
+        更新任务的执行检查点（每完成一个步骤调用一次）
+    block <slug> --reason <text>
+        标记任务为 blocked，写入阻塞原因
+    unblock <slug>
+        解除 blocked 状态，恢复为 in_progress
+    status <slug>
+        输出任务的完整状态（含 checkpoint 内容），供 Agent 恢复上下文
     finish <slug>
         标记任务为 completed
     archive <slug>
@@ -42,6 +52,21 @@ def _slugify(text: str) -> str:
     return s or "task"
 
 
+# ── 任务状态常量 ────────────────────────────────────────────────
+STATUS_PLANNING    = "planning"      # prd/acceptance 待确认
+STATUS_CONFIRMED   = "confirmed"     # 已确认，等待进入队列
+STATUS_IN_PROGRESS = "in_progress"   # 执行中
+STATUS_BLOCKED     = "blocked"       # 有阻塞，等人介入
+STATUS_COMPLETED   = "completed"     # 完成
+
+# 自驱可运行的状态
+RUNNABLE_STATUSES = {STATUS_CONFIRMED, STATUS_IN_PROGRESS}
+
+
+def _task_dir_name(slug: str) -> str:
+    return f"{month_day()}-{slug}"
+
+
 def cmd_create(args: argparse.Namespace) -> int:
     developer = ensure_developer()
     aies = get_aies_dir()
@@ -58,12 +83,17 @@ def cmd_create(args: argparse.Namespace) -> int:
 
     task_dir.mkdir(parents=True)
 
+    # confirmed 模式：prd/acceptance 由人预填，可直接进入自驱队列
+    initial_status = STATUS_CONFIRMED if args.confirmed else STATUS_PLANNING
+
     task_data = {
         "slug": slug,
         "title": args.title,
-        "status": "planning",
+        "status": initial_status,
         "priority": args.priority,
         "owner": developer,
+        "confirmed": args.confirmed,
+        "autopilot": args.autopilot,
         "created_at": now_iso(),
         "updated_at": now_iso(),
         "commit": "",
@@ -76,119 +106,263 @@ def cmd_create(args: argparse.Namespace) -> int:
         json.dumps(task_data, indent=2, ensure_ascii=False), encoding="utf-8"
     )
 
-    # PRD 模板
+    # prd.md
+    prd_content = f"# {args.title}\n\n## 需求背景\n\nTODO\n\n## 验收标准\n\n- [ ] TODO\n\n## 技术方案\n\nTODO\n"
+    if args.confirmed:
+        prd_content = f"# {args.title}\n\n> ✅ 已确认，可进入自驱执行队列\n\n## 需求背景\n\n{args.description or 'TODO'}\n\n## 验收标准\n\n- [ ] TODO（由 Agent 在 autopilot 中补充）\n\n## 技术方案\n\nAgent 自动生成\n"
+    write_text(task_dir / "prd.md", prd_content)
+
+    # context.jsonl
     write_text(
-        task_dir / "prd.md",
-        f"""# {args.title}
-
-## 需求背景
-
-TODO
-
-## 验收标准
-
-- [ ] TODO
-
-## 技术方案
-
-TODO
-
-## 关联资源
-
-- 代码：TODO
-- 文档：TODO
-""",
+        task_dir / "context.jsonl",
+        '{"phase": "implement", "spec": "architecture.md", "reason": "理解分层约束"}\n'
+        '{"phase": "implement", "spec": "code-style.md", "reason": "命名和格式规范"}\n'
+        '{"phase": "check", "spec": "quality-gates.md", "reason": "质量门自检"}\n'
+        '{"phase": "check", "spec": "error-handling.md", "reason": "错误处理规范"}\n',
     )
 
-    # acceptance.md 骨架（强制，implement 前必须填写）
+    # acceptance.md（confirmed 模式下标注由 Agent 填写）
+    acceptance_note = "> ✅ 已确认任务，acceptance 由 Agent 在 autopilot 启动时填写\n" if args.confirmed else "> ⚠️ 本文件必须在 implement 阶段开始前填写完毕。\n"
     write_text(
         task_dir / "acceptance.md",
-        f"""# 验收与测试：{args.title}
-
-> 任务 ID：{slug}
-> 对应 PRD：prd.md
-> ⚠️ 本文件必须在 implement 阶段开始前填写完毕。
-
----
-
-## 一、验收场景（从用户需求出发）
-
-| # | 用户场景 | 输入 | 期望输出 | 优先级 |
-|---|---------|------|---------|-------|
-| AC-01 | TODO | TODO | TODO | P0 |
-
----
-
-## 二、单元测试矩阵
-
-| 测试用例 | 被测函数/类 | 输入 | 期望输出 | Mock 什么 |
-|---------|-----------|------|---------|---------|
-| UT-01 | TODO | 正常参数 | TODO | TODO |
-| UT-02 | TODO | 空输入 | 抛异常 / fallback | 无 |
-
-**测试文件位置**：`tests/unit/test_TODO.py`
-
----
-
-## 三、端到端测试（E2E）
-
-### Happy Path
-
-步骤：
-1. TODO
-2. TODO
-3. 断言：TODO
-
-```bash
-# 运行命令
-python -m tests.e2e.test_TODO
-```
-
-### 异常路径
-
-| 场景 | 模拟方法 | 期望行为 |
-|------|---------|---------|
-| 外部服务不可用 | mock 返回错误 | 降级处理，不崩溃 |
-
----
-
-## 四、验收命令
-
-```bash
-# 单元测试
-pytest tests/unit/test_TODO.py -v
-
-# E2E
-python -m tests.e2e.test_TODO
-
-# 全量
-pytest tests/ -v
-```
-
----
-
-## 五、验收通过标准
-
-- [ ] 所有 P0 验收场景通过
-- [ ] 单元测试矩阵全部通过
-- [ ] E2E Happy Path 通过
-- [ ] 异常路径不崩溃
-- [ ] 无真实网络请求（全部 mock）
-""",
+        f"# 验收与测试：{args.title}\n\n{acceptance_note}\n"
+        "## P0 验收场景\n\n| # | 场景 | 输入 | 期望结果 |\n|---|------|------|--------|\n| AC-01 | TODO | TODO | TODO |\n\n"
+        "## 验收通过标准\n\n- [ ] 所有 P0 场景通过\n- [ ] pytest tests/ -v 全绿\n",
     )
 
+    # checkpoint.md（confirmed 模式下预初始化）
+    if args.confirmed:
+        _write_initial_checkpoint(task_dir, args.title)
+
     print(f"✅ 任务已创建: {task_dir}")
-    print(f"   Slug: {slug}")
-    print(f"   Status: planning")
-    print(f"   📋 下一步：填写 prd.md 和 acceptance.md，然后开始 implement")
+    print(f"   Slug: {slug}  Status: {initial_status}  Autopilot: {args.autopilot}")
+    if args.confirmed:
+        print(f"   📋 已加入自驱队列，Agent 在下次 autopilot 触发时自动执行")
+    else:
+        print(f"   📋 请填写 prd.md + acceptance.md，然后运行 task.py start {slug}")
     return 0
 
 
-def _load_task(path: Path) -> dict:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, FileNotFoundError):
-        return {}
+def _write_initial_checkpoint(task_dir: Path, title: str) -> None:
+    write_text(
+        task_dir / "checkpoint.md",
+        f"""# Checkpoint: {title}
+
+> 这是 Agent 的外化工作记忆。上下文清空后，Agent 靠这个文件恢复进度。
+> 每完成一个步骤，Agent 必须更新本文件。
+
+## 当前状态
+
+- **阶段**：waiting（等待 autopilot 触发）
+- **已完成步骤**：无
+- **下一步**：分析 prd.md，生成 acceptance.md，进入 implement
+- **最后更新**：{now_iso()}
+
+## 执行历史
+
+（空）
+
+## 阻塞记录
+
+（无）
+""",
+    )
+
+
+def cmd_start(args: argparse.Namespace) -> int:
+    """将任务推进到 in_progress，初始化 checkpoint.md"""
+    task_dir = _find_task_dir(args.slug)
+    if not task_dir:
+        print(f"❌ 未找到任务: {args.slug}", file=sys.stderr)
+        return 1
+
+    task_json = task_dir / "task.json"
+    data = _load_task(task_json)
+    old_status = data.get("status")
+
+    if old_status == STATUS_IN_PROGRESS:
+        print(f"⚠️  任务已是 in_progress 状态")
+        _print_status(task_dir, data)
+        return 0
+
+    data["status"] = STATUS_IN_PROGRESS
+    data["updated_at"] = now_iso()
+    task_json.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    # 初始化或重置 checkpoint
+    checkpoint = task_dir / "checkpoint.md"
+    if not checkpoint.exists():
+        _write_initial_checkpoint(task_dir, data["title"])
+
+    print(f"✅ 任务已启动: {task_dir.name}")
+    print(f"   {old_status} → in_progress")
+    print(f"   checkpoint.md: {checkpoint}")
+    return 0
+
+
+def cmd_checkpoint(args: argparse.Namespace) -> int:
+    """更新任务执行检查点"""
+    task_dir = _find_task_dir(args.slug)
+    if not task_dir:
+        print(f"❌ 未找到任务: {args.slug}", file=sys.stderr)
+        return 1
+
+    task_json = task_dir / "task.json"
+    data = _load_task(task_json)
+    data["updated_at"] = now_iso()
+    task_json.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    checkpoint = task_dir / "checkpoint.md"
+    existing = checkpoint.read_text(encoding="utf-8") if checkpoint.exists() else ""
+
+    # 追加到执行历史
+    history_entry = f"\n### {now_iso()} — {args.step}\n\n{args.summary}\n"
+
+    # 重写"当前状态"块
+    next_step = args.next or "待定"
+    new_current = f"""## 当前状态
+
+- **阶段**：{args.phase or 'in_progress'}
+- **已完成步骤**：{args.step}
+- **下一步**：{next_step}
+- **最后更新**：{now_iso()}
+"""
+    # 替换或追加
+    if "## 当前状态" in existing:
+        import re
+        existing = re.sub(
+            r"## 当前状态\n[\s\S]*?(?=\n## |\Z)",
+            new_current,
+            existing,
+        )
+    else:
+        existing = new_current + "\n" + existing
+
+    if "## 执行历史" in existing:
+        existing = existing.replace(
+            "## 执行历史\n\n（空）",
+            f"## 执行历史\n{history_entry}"
+        )
+        if "（空）" not in existing:
+            existing = existing.replace(
+                "## 执行历史\n",
+                f"## 执行历史\n{history_entry}"
+            )
+    else:
+        existing += f"\n## 执行历史\n{history_entry}"
+
+    write_text(checkpoint, existing)
+
+    print(f"✅ Checkpoint 已更新: {args.step}")
+    print(f"   下一步: {next_step}")
+    return 0
+
+
+def cmd_block(args: argparse.Namespace) -> int:
+    """标记任务为 blocked"""
+    task_dir = _find_task_dir(args.slug)
+    if not task_dir:
+        print(f"❌ 未找到任务: {args.slug}", file=sys.stderr)
+        return 1
+
+    task_json = task_dir / "task.json"
+    data = _load_task(task_json)
+    data["status"] = STATUS_BLOCKED
+    data["updated_at"] = now_iso()
+    task_json.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    # 更新 checkpoint
+    checkpoint = task_dir / "checkpoint.md"
+    existing = checkpoint.read_text(encoding="utf-8") if checkpoint.exists() else ""
+    block_entry = f"\n### {now_iso()} — 🚫 BLOCKED\n\n**原因**: {args.reason}\n\n**需要人介入**: 是\n"
+
+    import re
+    new_current = f"""## 当前状态
+
+- **阶段**：BLOCKED
+- **阻塞原因**：{args.reason}
+- **下一步**：等待人工介入后运行 `task.py unblock {args.slug}`
+- **最后更新**：{now_iso()}
+"""
+    if "## 当前状态" in existing:
+        existing = re.sub(r"## 当前状态\n[\s\S]*?(?=\n## |\Z)", new_current, existing)
+    else:
+        existing = new_current + existing
+
+    if "## 阻塞记录" in existing:
+        existing = existing.replace(
+            "## 阻塞记录\n\n（无）",
+            f"## 阻塞记录\n{block_entry}"
+        )
+        existing += block_entry
+    else:
+        existing += f"\n## 阻塞记录\n{block_entry}"
+
+    write_text(checkpoint, existing)
+
+    print(f"🚫 任务已标记为 BLOCKED: {task_dir.name}")
+    print(f"   原因: {args.reason}")
+    print(f"   解除: python3 .aies/scripts/task.py unblock {args.slug}")
+    return 0
+
+
+def cmd_unblock(args: argparse.Namespace) -> int:
+    """解除 blocked 状态"""
+    task_dir = _find_task_dir(args.slug)
+    if not task_dir:
+        print(f"❌ 未找到任务: {args.slug}", file=sys.stderr)
+        return 1
+
+    task_json = task_dir / "task.json"
+    data = _load_task(task_json)
+    data["status"] = STATUS_IN_PROGRESS
+    data["updated_at"] = now_iso()
+    task_json.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    # 更新 checkpoint 当前状态
+    checkpoint = task_dir / "checkpoint.md"
+    if checkpoint.exists():
+        import re
+        existing = checkpoint.read_text(encoding="utf-8")
+        new_current = f"""## 当前状态
+
+- **阶段**：in_progress（已解除 BLOCKED）
+- **下一步**：Agent 在下次 autopilot 触发时继续执行
+- **最后更新**：{now_iso()}
+"""
+        existing = re.sub(r"## 当前状态\n[\s\S]*?(?=\n## |\Z)", new_current, existing)
+        write_text(checkpoint, existing)
+
+    print(f"✅ 任务已解除 BLOCKED: {task_dir.name}")
+    print(f"   Status: blocked → in_progress")
+    return 0
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    """输出任务完整状态，供 Agent 恢复上下文"""
+    task_dir = _find_task_dir(args.slug)
+    if not task_dir:
+        print(f"❌ 未找到任务: {args.slug}", file=sys.stderr)
+        return 1
+
+    data = _load_task(task_dir / "task.json")
+    _print_status(task_dir, data)
+    return 0
+
+
+def _print_status(task_dir: Path, data: dict) -> None:
+    print(f"\n{'='*60}")
+    print(f"任务: {data.get('title', task_dir.name)}")
+    print(f"Slug: {data.get('slug', '')}  Status: {data.get('status', '?')}  Priority: {data.get('priority', '?')}")
+    print(f"Autopilot: {data.get('autopilot', False)}  Updated: {data.get('updated_at', '?')}")
+    print(f"{'='*60}")
+
+    checkpoint = task_dir / "checkpoint.md"
+    if checkpoint.exists():
+        print("\n📍 Checkpoint（Agent 工作记忆）:")
+        print(checkpoint.read_text(encoding="utf-8"))
+    else:
+        print("\n（无 checkpoint，任务未启动）")
 
 
 def cmd_list(_args: argparse.Namespace) -> int:
@@ -207,13 +381,23 @@ def cmd_list(_args: argparse.Namespace) -> int:
         return 0
 
     print(f"活跃任务（{len(active)}）:\n")
-    print(f"  {'目录':<30} {'状态':<12} {'优先级':<6} 标题")
-    print(f"  {'-'*30} {'-'*12} {'-'*6} {'-'*40}")
+    print(f"  {'目录':<32} {'状态':<12} {'优先级':<6} {'自驱':<5} 标题")
+    print(f"  {'-'*32} {'-'*12} {'-'*6} {'-'*5} {'-'*40}")
     for p in active:
         data = _load_task(p / "task.json")
+        status = data.get("status", "unknown")
+        autopilot = "✅" if data.get("autopilot") else "  "
+        # 读取 checkpoint 下一步
+        checkpoint = p / "checkpoint.md"
+        next_step = ""
+        if checkpoint.exists():
+            import re
+            m = re.search(r"\*\*下一步\*\*[：:]\s*(.+)", checkpoint.read_text(encoding="utf-8"))
+            if m:
+                next_step = f" → {m.group(1)[:40]}"
         print(
-            f"  {p.name:<30} {data.get('status','unknown'):<12} "
-            f"{data.get('priority','-'):<6} {data.get('title','')}"
+            f"  {p.name:<32} {status:<12} {data.get('priority','-'):<6} {autopilot:<5} "
+            f"{data.get('title','')}{next_step}"
         )
     return 0
 
@@ -236,9 +420,18 @@ def cmd_list_archive(_args: argparse.Namespace) -> int:
     return 0
 
 
+def _load_task(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, FileNotFoundError):
+        return {}
+
+
 def _find_task_dir(slug: str) -> Path | None:
     aies = get_aies_dir()
     tasks_dir = aies / "tasks"
+    if not tasks_dir.is_dir():
+        return None
     for p in tasks_dir.iterdir():
         if not p.is_dir() or p.name == "archive":
             continue
@@ -255,13 +448,20 @@ def cmd_finish(args: argparse.Namespace) -> int:
 
     task_json = task_dir / "task.json"
     data = _load_task(task_json)
-    data["status"] = "completed"
+    data["status"] = STATUS_COMPLETED
     data["updated_at"] = now_iso()
-    task_json.write_text(
-        json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
+    task_json.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    print(f"✅ 任务已标记为 completed: {task_dir.name}")
+    # 更新 checkpoint 为已完成
+    checkpoint = task_dir / "checkpoint.md"
+    if checkpoint.exists():
+        import re
+        existing = checkpoint.read_text(encoding="utf-8")
+        new_current = f"## 当前状态\n\n- **阶段**：✅ COMPLETED\n- **最后更新**：{now_iso()}\n"
+        existing = re.sub(r"## 当前状态\n[\s\S]*?(?=\n## |\Z)", new_current, existing)
+        write_text(checkpoint, existing)
+
+    print(f"✅ 任务已完成: {task_dir.name}")
     print(f"   下一步：python3 .aies/scripts/task.py archive {args.slug}")
     return 0
 
@@ -291,29 +491,66 @@ def main() -> int:
     parser = argparse.ArgumentParser(prog="task.py")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
+    # create
     create_p = sub.add_parser("create", help="创建任务")
     create_p.add_argument("title", help="任务标题")
     create_p.add_argument("--slug", default="", help="可选的 slug")
-    create_p.add_argument(
-        "--priority", default="P2", choices=["P0", "P1", "P2", "P3"]
-    )
+    create_p.add_argument("--priority", default="P2", choices=["P0", "P1", "P2", "P3"])
+    create_p.add_argument("--confirmed", action="store_true",
+                          help="标记为已确认，可进入自驱队列（跳过人工 prd/acceptance 确认）")
+    create_p.add_argument("--autopilot", action="store_true",
+                          help="标记为自驱任务（autopilot 会自动拾取）")
+    create_p.add_argument("--description", default="", help="简短描述（--confirmed 时用于填充 prd）")
 
+    # list
     sub.add_parser("list", help="列出活跃任务")
     sub.add_parser("list-archive", help="列出已归档任务")
 
+    # start
+    start_p = sub.add_parser("start", help="启动任务（planning/confirmed → in_progress）")
+    start_p.add_argument("slug", help="任务 slug")
+
+    # checkpoint
+    cp_p = sub.add_parser("checkpoint", help="更新执行检查点")
+    cp_p.add_argument("slug", help="任务 slug")
+    cp_p.add_argument("--step", required=True, help="刚完成的步骤名称")
+    cp_p.add_argument("--summary", required=True, help="步骤摘要（做了什么，结果如何）")
+    cp_p.add_argument("--next", default="", help="下一步计划")
+    cp_p.add_argument("--phase", default="in_progress", help="当前阶段标签")
+
+    # block
+    block_p = sub.add_parser("block", help="标记任务为 blocked")
+    block_p.add_argument("slug", help="任务 slug")
+    block_p.add_argument("--reason", required=True, help="阻塞原因")
+
+    # unblock
+    unblock_p = sub.add_parser("unblock", help="解除 blocked 状态")
+    unblock_p.add_argument("slug", help="任务 slug")
+
+    # status
+    status_p = sub.add_parser("status", help="查看任务完整状态（含 checkpoint）")
+    status_p.add_argument("slug", help="任务 slug")
+
+    # finish
     finish_p = sub.add_parser("finish", help="标记任务完成")
     finish_p.add_argument("slug", help="任务 slug")
 
+    # archive
     archive_p = sub.add_parser("archive", help="归档任务")
     archive_p.add_argument("slug", help="任务 slug")
 
     args = parser.parse_args()
     match args.cmd:
-        case "create": return cmd_create(args)
-        case "list": return cmd_list(args)
-        case "list-archive": return cmd_list_archive(args)
-        case "finish": return cmd_finish(args)
-        case "archive": return cmd_archive(args)
+        case "create":      return cmd_create(args)
+        case "list":        return cmd_list(args)
+        case "list-archive":return cmd_list_archive(args)
+        case "start":       return cmd_start(args)
+        case "checkpoint":  return cmd_checkpoint(args)
+        case "block":       return cmd_block(args)
+        case "unblock":     return cmd_unblock(args)
+        case "status":      return cmd_status(args)
+        case "finish":      return cmd_finish(args)
+        case "archive":     return cmd_archive(args)
     return 1
 
 

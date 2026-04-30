@@ -1,0 +1,5 @@
+{"phase": "implement", "spec": "architecture.md", "reason": "Langfuse 应在 shared/observability.py 层集成，不能侵入 SubGraph 业务逻辑"}
+{"phase": "implement", "spec": "code-style.md", "reason": "懒加载/None 安全模式规范"}
+{"phase": "implement", "spec": "guides/cross-layer.md", "reason": "Langfuse token 从 Config 透传，不能从 SubGraph 读环境变量"}
+{"phase": "check", "spec": "quality-gates.md", "reason": "质量门：Langfuse 禁用时不崩溃，token 不硬编码"}
+{"phase": "check", "spec": "logging.md", "reason": "LLM trace 日志规范"}
