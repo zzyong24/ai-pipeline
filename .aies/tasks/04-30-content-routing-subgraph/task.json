@@ -1,0 +1,17 @@
+{
+  "slug": "content-routing-subgraph",
+  "title": "content 路由 SubGraph：分类落库到 vault",
+  "status": "planning",
+  "priority": "P2",
+  "owner": "zyongzhu",
+  "created_at": "2026-04-30 11:55:51",
+  "updated_at": "2026-04-30 12:10:00",
+  "commit": "",
+  "parent": null,
+  "children": [],
+  "related_files": [
+    "subgraphs/routing_subgraph/",
+    "01-video-md/main_graph.py"
+  ],
+  "notes": "依赖 04-24-langfuse-integration 完成后再实施。PRD 在同目录 prd.md。"
+}

@@ -76,7 +76,7 @@ def cmd_create(args: argparse.Namespace) -> int:
         json.dumps(task_data, indent=2, ensure_ascii=False), encoding="utf-8"
     )
 
-    # 可选：PRD 模板
+    # PRD 模板
     write_text(
         task_dir / "prd.md",
         f"""# {args.title}
@@ -100,9 +100,87 @@ TODO
 """,
     )
 
+    # acceptance.md 骨架（强制，implement 前必须填写）
+    write_text(
+        task_dir / "acceptance.md",
+        f"""# 验收与测试：{args.title}
+
+> 任务 ID：{slug}
+> 对应 PRD：prd.md
+> ⚠️ 本文件必须在 implement 阶段开始前填写完毕。
+
+---
+
+## 一、验收场景（从用户需求出发）
+
+| # | 用户场景 | 输入 | 期望输出 | 优先级 |
+|---|---------|------|---------|-------|
+| AC-01 | TODO | TODO | TODO | P0 |
+
+---
+
+## 二、单元测试矩阵
+
+| 测试用例 | 被测函数/类 | 输入 | 期望输出 | Mock 什么 |
+|---------|-----------|------|---------|---------|
+| UT-01 | TODO | 正常参数 | TODO | TODO |
+| UT-02 | TODO | 空输入 | 抛异常 / fallback | 无 |
+
+**测试文件位置**：`tests/unit/test_TODO.py`
+
+---
+
+## 三、端到端测试（E2E）
+
+### Happy Path
+
+步骤：
+1. TODO
+2. TODO
+3. 断言：TODO
+
+```bash
+# 运行命令
+python -m tests.e2e.test_TODO
+```
+
+### 异常路径
+
+| 场景 | 模拟方法 | 期望行为 |
+|------|---------|---------|
+| 外部服务不可用 | mock 返回错误 | 降级处理，不崩溃 |
+
+---
+
+## 四、验收命令
+
+```bash
+# 单元测试
+pytest tests/unit/test_TODO.py -v
+
+# E2E
+python -m tests.e2e.test_TODO
+
+# 全量
+pytest tests/ -v
+```
+
+---
+
+## 五、验收通过标准
+
+- [ ] 所有 P0 验收场景通过
+- [ ] 单元测试矩阵全部通过
+- [ ] E2E Happy Path 通过
+- [ ] 异常路径不崩溃
+- [ ] 无真实网络请求（全部 mock）
+""",
+    )
+
     print(f"✅ 任务已创建: {task_dir}")
     print(f"   Slug: {slug}")
     print(f"   Status: planning")
+    print(f"   📋 下一步：填写 prd.md 和 acceptance.md，然后开始 implement")
     return 0
 
 

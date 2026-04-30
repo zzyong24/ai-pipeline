@@ -24,6 +24,7 @@
 | [architecture.md](./architecture.md) | **SubGraph 设计约束 / 主 Graph 编排 / fan-out 规则** | **每次写代码前**（本项目最关键） |
 | [code-style.md](./code-style.md) | Python / LangGraph 命名、注释、类型、反模式 | **每次写代码前** |
 | [quality-gates.md](./quality-gates.md) | 禁止模式、必须模式、自检清单 | 每次写代码前 |
+| [testing.md](./testing.md) | 单元测试、E2E、acceptance.md 规范 | **每次新增任务时、implement 前** |
 | [error-handling.md](./error-handling.md) | 错误处理、异常传递 | 涉及错误处理时 |
 | [logging.md](./logging.md) | 日志级别、格式、前缀 | 涉及日志时 |
 | **外部规范** | `vault/space/crafted/study/langgraph-subgraph/subgraph-design-spec.md` | SubGraph 相关任务必读（待迁入仓库，见 `.ai/known-issues.md` #1） |
@@ -37,6 +38,7 @@
 cat .aies/spec/index.md              # 本文件
 cat .aies/spec/architecture.md       # SubGraph 架构约束（最重要）
 cat .aies/spec/code-style.md         # Python / LangGraph 风格
+cat .aies/spec/testing.md            # 测试规范（新增任务时必读）
 
 # 按任务类型额外读取（详见 .ai/context-guide.md）：
 # 新增 SubGraph  → architecture.md 的 SubGraph 设计约束章节
@@ -77,9 +79,13 @@ cat .aies/spec/code-style.md         # Python / LangGraph 风格
    - [ ] Python 风格（pathlib、无硬编码路径、docstring）
    - [ ] AI 常见盲区（硬编码路径、遗漏 Reducer）
    - [ ] 文档更新（index.md / changelog.md / README.md）
-2. 索引更新：[已更新 .ai/index.md / 无需]
-3. 建议 commit message：`type(scope): 描述 [ai-assisted]`
-4. 是否有新约定需沉淀：[有/无]
+2. 测试验收（参照 acceptance.md）：
+   - [ ] 单元测试全部通过（pytest tests/unit/ -v）
+   - [ ] E2E Happy Path 通过
+   - [ ] acceptance.md 中所有 P0 验收场景打勾
+3. 索引更新：[已更新 .ai/index.md / 无需]
+4. 建议 commit message：`type(scope): 描述 [ai-assisted]`
+5. 是否有新约定需沉淀：[有/无]
 ```
 
 ---
