@@ -287,7 +287,11 @@ def node_research(state: PipelineState) -> Dict[str, Any]:
         return {"step": "error", "error": "topic 为空"}
 
     # 调 SubGraph（模式 2：独立 Schema）
-    sub_input: ResearchState = {"topic": topic, "_trace_span": state.get("_trace_span")}
+    sub_input: ResearchState = {
+        "topic": topic,
+        "sources": state.get("sources") or ["bilibili"],
+        "_trace_span": state.get("_trace_span"),
+    }
     sub_result = _get_research_subgraph().invoke(sub_input)
 
     if sub_result.get("error"):
