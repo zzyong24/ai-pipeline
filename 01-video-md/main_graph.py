@@ -672,21 +672,49 @@ def node_text_extract_single(sub_state: Dict[str, Any]) -> Dict[str, Any]:
     idx = sub_state.get("idx", 0)
     url = sub_state.get("source_url", "")
     src_type = sub_state.get("source_type", "unknown")
+    title = sub_state.get("title", url)
     print(f"[main:text_extract:{idx}] {src_type} — {url[:60]}")
 
     try:
         sub_result = _get_text_extract_subgraph().invoke(sub_state)
         summary_text = sub_result.get("summary")
         if summary_text:
+            # ── 落盘到 task 目录（与 transcribe 对齐）──────────────────────
+            task_dir = OUTPUT_TRANSCRIBE / f"task-{idx}"
+            task_dir.mkdir(parents=True, exist_ok=True)
+
+            # 保存原始内容（替代 .srt）
+            safe_title = "".join(c if c.isalnum() or c in " -_" else "_" for c in title[:60])
+            content_file = task_dir / f"{safe_title}.txt"
+            raw_content = sub_state.get("text_content", "")
+            if raw_content:
+                content_file.write_text(raw_content, encoding="utf-8")
+
+            # 保存 summary.json
+            import json as _json
+            summary_data = {
+                "source_type": src_type,
+                "url": url,
+                "title": title,
+                "author": sub_state.get("author", ""),
+                "summary": summary_text,
+            }
+            (task_dir / "summary.json").write_text(
+                _json.dumps(summary_data, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            print(f"[main:text_extract:{idx}] 已保存到 {task_dir.name}/")
+            # ──────────────────────────────────────────────────────────────────
+
             summary_item = {
                 "video": url,
-                "title": sub_state.get("title", url),
+                "title": title,
                 "source_type": src_type,
                 "summary": summary_text,
             }
             return {
                 "summaries": [summary_item],
-                "completed_videos": [{"url": url, "title": sub_state.get("title", url), "source_type": src_type, "summary": summary_text}],
+                "completed_videos": [{"url": url, "title": title, "source_type": src_type, "summary": summary_text}],
                 "_dispatched": [url],
             }
         else:
@@ -759,6 +787,10 @@ def _get_routing_subgraph():
         _routing_subgraph = build_routing_subgraph(RoutingConfig(rules=[
             RoutingRule(source_type="video",   content_type="study_doc",      topic="reading"),
             RoutingRule(source_type="podcast", content_type="study_doc",      topic="reading"),
+            RoutingRule(source_type="article", content_type="knowledge_card", topic="reading"),
+            RoutingRule(source_type="twitter", content_type="knowledge_card", topic="reading"),
+            RoutingRule(source_type="hackernews", content_type="knowledge_card", topic="reading"),
+            RoutingRule(source_type="zhihu",   content_type="knowledge_card", topic="reading"),
             RoutingRule(keywords=["论文", "研究", "实验", "数据集"],
                         content_type="knowledge_card", topic="ai"),
             RoutingRule(keywords=["教程", "手册", "实战", "指南"],
@@ -770,10 +802,16 @@ def _get_routing_subgraph():
 
 def node_route_content(state: PipelineState) -> Dict[str, Any]:
     """调 routing_subgraph，把 RouteDecision 写回主 State。"""
+    # 推断主要 source_type：有视频就是 video，全是文本源就是 article
+    source_items = state.get("source_items") or []
+    src_types = [i.get("source_type", "bilibili") for i in source_items]
+    has_video = any(t == "bilibili" for t in src_types)
+    dominant_source = "video" if has_video else (src_types[0] if src_types else "article")
+
     sub_input: RoutingState = {
         "title": state.get("topic", ""),
         "summary": (state.get("book_draft") or "")[:500],
-        "source_type": "video",
+        "source_type": dominant_source,
         "source_url": (state.get("approved_videos") or [""])[0],
         "_trace_span": state.get("_trace_span"),
     }
